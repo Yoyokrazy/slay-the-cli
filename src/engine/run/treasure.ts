@@ -46,8 +46,8 @@ export interface ChestContents {
 
 /** openTreasureRoomChest: gold amount = round(random(base*0.9, base*1.1)),
  *  then the relic (or the sapphire key INSTEAD of the relic).
- *  TODO relic content hooks: CURSED_KEY random curse, MATRYOSHKA extra relic
- *  (relicRng.randomBoolean(0.75) common else uncommon), NLOTHS_HUNGRY_FACE. */
+ *  TODO relic content hooks: NLOTHS_HUNGRY_FACE. Matryoshka is handled by
+ *  onChestOpen in runFlow after the chest's main relic is determined. */
 export function openChestContents(ctx: EffectCtx, chest: ChestState, takeSapphireKey: boolean): ChestContents {
   if (chest.opened) throw new Error("chest already opened");
   chest.opened = true;

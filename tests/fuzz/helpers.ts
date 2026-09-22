@@ -3,6 +3,7 @@
 
 import { advance, type Command, type GameState } from "../../src/engine/game";
 import type { ContentBundle, EffectCtx } from "../../src/engine/content/defs";
+import { needsEnemyTarget } from "../../src/engine/content/targeting";
 import { ActionQueue } from "../../src/engine/core/queue";
 import { effectiveCost } from "../../src/engine/combat/interpreter";
 import { vetoHook } from "../../src/engine/core/hooks";
@@ -67,7 +68,7 @@ export function legalCommands(s: GameState, bundle: ContentBundle): Command[] {
     if (combat.player.energy < cost && !c.freeToPlayOnce) return;
     if (def.canUse) return; // conservative: skip conditional cards in the fuzz driver
     if (!vetoHook(ctx, PLAYER, "canPlayCard", c)) return; // Normality/Velvet Choker/Entangled
-    if (def.target === "enemy") {
+    if (needsEnemyTarget(def.target)) {
       for (const t of aliveMonsters) out.push({ cmd: "playCard", handIdx, target: t });
     } else {
       out.push({ cmd: "playCard", handIdx });

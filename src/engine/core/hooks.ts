@@ -8,7 +8,7 @@
 // Every engine call site fires hooks through the functions at the bottom of
 // this file - never by iterating powers/relics itself.
 
-import type { ActorRef, CardId } from "./ids";
+import type { ActorRef, CardId, RelicId } from "./ids";
 import type { CardInstance, MonsterState, PowerInstance } from "../combat/combatState";
 import type { DamageInfo } from "./actions";
 import type { EffectCtx } from "../content/defs";
@@ -72,6 +72,8 @@ export interface Hooks {
   onApplyPower?(ctx: HookCtx, powerId: string, target: ActorRef, source: ActorRef | null): boolean | void; // Artifact veto (return false)
   /** fold: upgrade count for cards created mid-combat (Master Reality -> max(n,1)) */
   modifyCreatedCardUpgrades?(ctx: HookCtx, upgrades: number, defId: CardId): number;
+  /** fold: upgrade count for cards obtained into the master deck (Molten/Frozen/Toxic Egg) */
+  modifyObtainedCardUpgrades?(ctx: HookCtx, upgrades: number, defId: CardId): number;
   onSpecificTrigger?(ctx: HookCtx): void;
   // --- life & death ---
   onHeal?(ctx: HookCtx, amount: number): number; // Magic Flower, Mark of the Bloom
@@ -92,7 +94,7 @@ export interface Hooks {
   onEnterRestSite?(ctx: HookCtx): void;
   onRest?(ctx: HookCtx): void;
   onSmith?(ctx: HookCtx): void;
-  onChestOpen?(ctx: HookCtx, isBossChest: boolean): void;
+  onChestOpen?(ctx: HookCtx, isBossChest: boolean, extraRelics: RelicId[]): void;
   onUsePotion?(ctx: HookCtx): void; // Toy Ornithopter
   modifyRewards?(ctx: HookCtx, rewards: unknown): void; // Question Card, Busted Crown
   modifyPrice?(ctx: HookCtx, basePrice: number): number; // Membership Card, Courier

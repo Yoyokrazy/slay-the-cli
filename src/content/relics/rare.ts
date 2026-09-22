@@ -222,7 +222,7 @@ export const rareRelics: RelicDef[] = [
   },
   {
     // "When you would die, heal to 50% of your Max HP instead (works once)."
-    // ENGINE-GAP: playerDeath has no death-save hook (engine notes it lands Phase 2+).
+    // The combat death-save hook flips counter from 0 -> 1 when spent.
     id: "LIZARD_TAIL",
     name: "Lizard Tail",
     tier: "rare",

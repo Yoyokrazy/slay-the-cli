@@ -12,8 +12,55 @@
 // monster intent whose preview cannot finish.
 
 import type { CardCtx, ContentBundle, EffectCtx } from "../content/defs";
+import { needsEnemyTarget } from "../content/targeting";
 import type { CardInstance } from "./combatState";
+import { vetoHook } from "../core/hooks";
+import { PLAYER } from "../core/ids";
 import { ActionQueue } from "../core/queue";
+import { effectiveCost } from "./interpreter";
+
+function previewCost(ctx: EffectCtx, card: CardInstance): number {
+  if (card.cost < 0) return card.cost;
+  if (card.freeToPlayOnce) return 0;
+  return effectiveCost(ctx, card);
+}
+
+/** Current energy cost without running hooks against the live state or RNG. */
+export function getCardCost(
+  state: { run: EffectCtx["run"]; combat: EffectCtx["combat"] },
+  bundle: ContentBundle,
+  card: CardInstance,
+): number {
+  const isolated = structuredClone({ run: state.run, combat: state.combat, card });
+  return previewCost(previewCtx(isolated, bundle), isolated.card);
+}
+
+/** Hand availability uses the engine's guards, never plays the card or drains a queue. */
+export function getCardPlayability(
+  state: { run: EffectCtx["run"]; combat: EffectCtx["combat"] },
+  bundle: ContentBundle,
+  card: CardInstance,
+): { cost: number; playable: boolean } {
+  const isolated = structuredClone({ run: state.run, combat: state.combat, card });
+  const { combat, card: c } = isolated;
+  if (!combat || !combat.player.piles.hand.includes(c.iid)) {
+    throw new Error("card playability preview requires a card in hand");
+  }
+  const def = bundle.cards.get(c.defId);
+  if (!def) throw new Error(`unknown card def ${c.defId}`);
+  const ctx = previewCtx(isolated, bundle);
+  const cost = previewCost(ctx, c);
+  if (c.cost === -2 || (!c.freeToPlayOnce && combat.player.energy < Math.max(0, cost))) {
+    return { cost, playable: false };
+  }
+  const targets = needsEnemyTarget(def.target)
+    ? combat.monsters.flatMap((m, i) => m.isDead || m.isEscaped ? [] : [i])
+    : [null];
+  const usable = targets.some(target => !def.canUse || def.canUse({
+    ...ctx, card: c, target, energyOnUse: combat.player.energy, upgraded: c.upgrades > 0,
+  }));
+  return { cost, playable: usable && vetoHook(ctx, PLAYER, "canPlayCard", c) };
+}
 
 export interface CardPreview {
   /** per-hit damage aimed at the previewed target (null = deals none) */

@@ -7,6 +7,7 @@
 // Single-candidate mandatory choices auto-resolve, matching the game's grids.
 
 import type { CardDef, EffectCtx, EffectFn } from "../../../engine/content/defs";
+import { needsEnemyTarget } from "../../../engine/content/targeting";
 import type { GameAction, ChoiceRequest } from "../../../engine/core/actions";
 import type { CardQueueItem, PowerInstance } from "../../../engine/combat/combatState";
 import type { CardInstanceId } from "../../../engine/core/ids";
@@ -314,8 +315,8 @@ function omnisciencePlay(ctx: EffectCtx, iid: CardInstanceId): void {
   const c = combat.cards[iid];
   if (!c) return;
   const def = ctx.bundle.cards.get(c.defId);
-  const target = def?.target === "enemy" ? randomAliveIdx(ctx) : null;
-  if (def?.target === "enemy" && target === null) return;
+  const target = needsEnemyTarget(def?.target) ? randomAliveIdx(ctx) : null;
+  if (needsEnemyTarget(def?.target) && target === null) return;
   const mk = (exhaustOnUse: boolean): CardQueueItem => ({
     iid,
     target,

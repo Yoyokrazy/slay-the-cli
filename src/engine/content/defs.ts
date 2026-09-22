@@ -16,7 +16,7 @@ import type {
   EffectRefId,
 } from "../core/ids";
 import type { CombatState, CardInstance, MonsterState, Pile } from "../combat/combatState";
-import type { RunState } from "../run/runState";
+import type { MasterCard, RunState } from "../run/runState";
 import type { ActionQueue } from "../core/queue";
 import type { GameAction, DamageInfo, PendingChoice } from "../core/actions";
 import type { Rng } from "../core/rng";
@@ -58,6 +58,14 @@ export interface CardCtx extends EffectCtx {
 
 export type EffectFn = (ctx: EffectCtx, args?: unknown) => void;
 export type CardEffectFn = (ctx: CardCtx) => void;
+export type MasterDeckRemovalReason = string;
+
+export interface MasterDeckCardCtx extends EffectCtx {
+  card: MasterCard;
+  reason: MasterDeckRemovalReason;
+}
+
+export type MasterDeckCardEffectFn = (ctx: MasterDeckCardCtx) => void;
 
 // --- primitives DSL (covers simple cards; audited against the corpus) ---------
 export type CardPrimitive =
@@ -98,6 +106,7 @@ export interface CardDef {
   onManualDiscardThis?: CardEffectFn;
   onEndOfTurnInHand?: CardEffectFn; // Burn/Decay/Doubt/Shame/Regret
   onRetainThis?: CardEffectFn;
+  onRemoveFromMasterDeck?: MasterDeckCardEffectFn;
   /** Weave: fires after a scry resolves while this card sits in the discard pile */
   onScryThisInDiscard?: CardEffectFn;
   /** Flurry of Blows: fires on stance change while this card sits in the discard pile */
@@ -175,8 +184,15 @@ export interface MonsterMoveDef {
     | "unknown";
   /** executes the move by enqueuing actions */
   execute(ctx: EffectCtx, self: MonsterState): void;
-  /** intent display numbers (damage x hits) computed through the damage calc */
-  displayDamage?(ctx: EffectCtx, self: MonsterState): { damage: number; hits: number } | null;
+  /** Read-only attack preview, used instead of execute when present. Damage
+   *  goes through the live calc; partial defaults to true unless all effects
+   *  are known. goldLoss is bounded by current gold, before other enemies act. */
+  displayDamage?(ctx: EffectCtx, self: MonsterState): {
+    damage: number;
+    hits: number;
+    goldLoss?: number;
+    partial?: boolean;
+  } | null;
 }
 
 export interface MonsterDef {

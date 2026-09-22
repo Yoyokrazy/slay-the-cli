@@ -4,6 +4,7 @@
 // is empty at every player-input point by construction.
 
 import type { EffectCtx, CardCtx, ContentBundle } from "../content/defs";
+import { needsEnemyTarget } from "../content/targeting";
 import type { GameAction, DamageInfo, CardSelector } from "../core/actions";
 import type { CardInstance, CardQueueItem, MonsterState, Pile } from "./combatState";
 import { fireHook, foldHook, foldHookScoped, anyHook } from "../core/hooks";
@@ -333,9 +334,37 @@ export function spawnMonster(
 }
 
 function playerDeath(ctx: EffectCtx): void {
-  // Fairy in a Bottle / Lizard Tail resurrections hook in here later (Phase 2+)
+  if (tryUseFairyPotion(ctx) && ctx.run.hp > 0) return;
+  if (tryUseLizardTail(ctx) && ctx.run.hp > 0) return;
   ctx.rt.combatOver = "defeat";
   ctx.emit("defeat");
+}
+
+function tryUseFairyPotion(ctx: EffectCtx): boolean {
+  const slot = ctx.run.potions.indexOf("FAIRY_POTION");
+  if (slot === -1) return false;
+  const def = ctx.bundle.potions.get("FAIRY_POTION");
+  const barkDoubled = def?.sacredBarkDoubles === true && ctx.run.relics.some((r) => r.defId === "SACRED_BARK");
+  const potency = (def?.potency ?? 30) * (barkDoubled ? 2 : 1);
+  ctx.run.potions[slot] = null;
+  healFromDeathSave(ctx, potency);
+  return true;
+}
+
+function tryUseLizardTail(ctx: EffectCtx): boolean {
+  const relic = ctx.run.relics.find((r) => r.defId === "LIZARD_TAIL");
+  if (!relic || relic.counter !== 0) return false;
+  relic.counter = 1;
+  healFromDeathSave(ctx, 50);
+  return true;
+}
+
+function healFromDeathSave(ctx: EffectCtx, percent: number): void {
+  const amount = Math.floor((ctx.run.maxHp * percent) / 100);
+  const healed = Math.floor(foldHook(ctx, PLAYER, "onHeal", amount));
+  const was = ctx.run.hp;
+  ctx.run.hp = Math.min(ctx.run.maxHp, ctx.run.hp + healed);
+  if (was <= ctx.run.maxHp / 2 && ctx.run.hp > ctx.run.maxHp / 2) fireHook(ctx, PLAYER, "onNotBloodied");
 }
 
 // ------------------------------------------------------------------------------
@@ -443,7 +472,7 @@ function resolveCardPlay(ctx: EffectCtx, item: CardQueueItem): void {
   ctx.rt.currentItem = item;
 
   // target validity: fizzle if targeted monster is gone (duplicated plays can outlive targets)
-  if (def.target === "enemy" && item.target !== null) {
+  if (needsEnemyTarget(def.target) && item.target !== null) {
     const t = combat.monsters[item.target];
     if (!t || t.isDead || t.isEscaped) {
       ctx.rt.currentItem = null;

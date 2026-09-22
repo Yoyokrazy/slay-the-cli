@@ -105,6 +105,7 @@ const play = (s: GameState, name: string, target?: number) => {
 };
 const power = (s: GameState, id: string) => s.combat!.player.powers.find((p) => p.id === id);
 const monsterHp = (s: GameState) => s.combat!.monsters[0]!.hp;
+const relicCounter = (s: GameState, id: string) => s.run.relics.find((r) => r.defId === id)!.counter;
 
 function gameWithIntent(move: string, opts: Parameters<typeof game>[0] = {}): GameState {
   for (let i = 0; i < 30; i++) {
@@ -115,6 +116,61 @@ function gameWithIntent(move: string, opts: Parameters<typeof game>[0] = {}): Ga
 }
 
 // ---------------------------------------------------------------------------
+
+describe("death-save potions and relics", () => {
+  test("Fairy in a Bottle cannot be manually drunk", () => {
+    const s = game({});
+    s.run.potions[0] = "FAIRY_POTION";
+    expect(() => advance(s, { cmd: "usePotion", slot: 0 }, B)).toThrow("cannot be used");
+    expect(s.run.potions[0]).toBe("FAIRY_POTION");
+  });
+
+  test("Fairy in a Bottle is consumed once when lethal damage lands", () => {
+    let s = gameWithIntent("ATTACK", { hp: 1 });
+    s.run.potions[0] = "FAIRY_POTION";
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.outcome).toBeNull();
+    expect(s.run.hp).toBe(24);
+    expect(s.run.potions[0]).toBeNull();
+
+    s.run.hp = 1;
+    s.combat!.monsters[0]!.move = "ATTACK";
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.outcome).toEqual({ kind: "death" });
+  });
+
+  test("Sacred Bark doubles Fairy in a Bottle's death-save heal", () => {
+    let s = gameWithIntent("ATTACK", { hp: 1, relics: ["SACRED_BARK"] });
+    s.run.potions[0] = "FAIRY_POTION";
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.outcome).toBeNull();
+    expect(s.run.hp).toBe(48);
+    expect(s.run.potions[0]).toBeNull();
+  });
+
+  test("Fairy in a Bottle has priority over Lizard Tail", () => {
+    let s = gameWithIntent("ATTACK", { hp: 1, relics: ["LIZARD_TAIL"] });
+    s.run.potions[0] = "FAIRY_POTION";
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.outcome).toBeNull();
+    expect(s.run.hp).toBe(24);
+    expect(s.run.potions[0]).toBeNull();
+    expect(relicCounter(s, "LIZARD_TAIL")).toBe(0);
+  });
+
+  test("Lizard Tail death-save heals once per run", () => {
+    let s = gameWithIntent("ATTACK", { hp: 1, relics: ["LIZARD_TAIL"] });
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.outcome).toBeNull();
+    expect(s.run.hp).toBe(40);
+    expect(relicCounter(s, "LIZARD_TAIL")).toBe(1);
+
+    s.run.hp = 1;
+    s.combat!.monsters[0]!.move = "ATTACK";
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.outcome).toEqual({ kind: "death" });
+  });
+});
 
 describe("damage & block potions", () => {
   test("Fire Potion: exactly 20 to the target (no Strength/Vulnerable scaling)", () => {

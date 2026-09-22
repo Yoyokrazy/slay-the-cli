@@ -12,9 +12,10 @@
 import type { RelicDef } from "../../engine/content/defs";
 import { f32add } from "../../engine/core/math";
 import { PLAYER, monster } from "../../engine/core/ids";
+import { obtainDeckCard } from "../../engine/run/deck";
 import { cnt, healPlayer } from "./lib";
 import { astrolabePickup, callingBellPickup, emptyCagePickup, pandorasBoxPickup, tinyHousePickup } from "./pickup";
-import { removeRelic } from "../events/lib";
+import { randomCurse, removeRelic } from "../events/lib";
 import { channelOrb } from "../../engine/combat/orbRuntime";
 
 export const bossRelics: RelicDef[] = [
@@ -28,7 +29,8 @@ export const bossRelics: RelicDef[] = [
     hooks: { onVictory: (ctx) => healPlayer(ctx, 12) },
   },
   {
-    // "Gain 1 Energy... Future card rewards have 2 less cards." ENGINE-GAP(energy) + RUN-LAYER(rewards).
+    // "Gain 1 Energy... Future card rewards have 2 less cards."
+    // ENGINE-GAP(energy); reward size is folded centrally in run/rewards.ts.
     id: "BUSTED_CROWN",
     energyBonus: 1,
     name: "Busted Crown",
@@ -37,7 +39,8 @@ export const bossRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Gain 1 Energy... You can no longer Rest at Rest Sites." ENGINE-GAP(energy) + RUN-LAYER(rest).
+    // "Gain 1 Energy... You can no longer Rest at Rest Sites."
+    // ENGINE-GAP(energy); the rest option is gated in runFlow.ts.
     id: "COFFEE_DRIPPER",
     energyBonus: 1,
     name: "Coffee Dripper",
@@ -47,13 +50,26 @@ export const bossRelics: RelicDef[] = [
   },
   {
     // "Gain 1 Energy... Whenever you open a non-Boss chest, obtain a Curse."
-    // ENGINE-GAP(energy); the curse obtain needs the run layer's curse pool + relicRng.
+    // ENGINE-GAP(energy); the drawback uses the standard curse pool + cardRng.
     id: "CURSED_KEY",
     energyBonus: 1,
     name: "Cursed Key",
     tier: "boss",
     pool: "shared",
-    hooks: {},
+    hooks: {
+      onChestOpen: (ctx, isBossChest) => {
+        if (isBossChest) return;
+        // Sapphire Key is chosen after the chest opens in StS; runFlow fires
+        // this hook for both openChest and takeSapphireKey.
+        const curse = randomCurse(ctx);
+        if (!curse) return;
+        const before = ctx.run.deck.length;
+        obtainDeckCard(ctx, curse);
+        if (ctx.run.deck.length > before) {
+          ctx.emit("deckCardObtained", { defId: curse, upgrades: ctx.run.deck[ctx.run.deck.length - 1]!.upgrades });
+        }
+      },
+    },
   },
   {
     // "Gain 1 Energy... You can no longer gain Gold." ENGINE-GAP(energy); gold zeroing implemented.
@@ -84,7 +100,8 @@ export const bossRelics: RelicDef[] = [
     },
   },
   {
-    // "Gain 1 Energy... You can no longer Smith." ENGINE-GAP(energy) + RUN-LAYER(rest).
+    // "Gain 1 Energy... You can no longer Smith."
+    // ENGINE-GAP(energy); the smith option is gated in runFlow.ts.
     id: "FUSION_HAMMER",
     energyBonus: 1,
     name: "Fusion Hammer",
@@ -262,7 +279,8 @@ export const bossRelics: RelicDef[] = [
     },
   },
   {
-    // "Gain 1 Energy... You can no longer obtain potions." ENGINE-GAP(energy) + RUN-LAYER(potion rewards).
+    // "Gain 1 Energy... You can no longer obtain potions."
+    // ENGINE-GAP(energy); potion rewards and pickups are gated in the run layer.
     id: "SOZU",
     energyBonus: 1,
     name: "Sozu",

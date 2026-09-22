@@ -19,6 +19,16 @@ export function attackPlayer(ctx: EffectCtx, self: MonsterState, base: number, h
   }
 }
 
+/** Thief attacks have deterministic effects despite their cosmetic dialog RNG. */
+export function previewThievingAttack(ctx: EffectCtx, self: MonsterState, base: number) {
+  return {
+    damage: calcMonsterDamage(ctx, self.idx, base),
+    hits: 1,
+    goldLoss: Math.max(0, Math.min(ctx.run.gold, powerAmount(self, "THIEVERY"))),
+    partial: false,
+  };
+}
+
 /** Queue a power application onto the monster itself. */
 export function selfPower(ctx: EffectCtx, self: MonsterState, powerId: string, amount: number): void {
   ctx.queue.addToBottom({

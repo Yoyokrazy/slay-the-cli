@@ -4,6 +4,7 @@
 
 import type { CardDef } from "../../engine/content/defs";
 import { PLAYER } from "../../engine/core/ids";
+import { obtainDeckCard } from "../../engine/run/deck";
 
 export const curseCards: CardDef[] = [
   {
@@ -104,6 +105,9 @@ export const curseCards: CardDef[] = [
       // "There is no escape": exhausting it puts a fresh copy in your hand
       ctx.queue.addToBottom({ kind: "makeTempCard", defId: "NECRONOMICURSE", upgrades: 0, dest: "hand", n: 1 });
     },
+    onRemoveFromMasterDeck: (ctx) => {
+      obtainDeckCard(ctx, ctx.card.defId);
+    },
   },
   {
     id: "NORMALITY",
@@ -150,8 +154,10 @@ export const curseCards: CardDef[] = [
     values: {},
     upgradeValues: {},
     keywords: [],
-    // ENGINE-GAP: "If transformed or removed from your deck, lose 3 Max HP" is a
-    // run-layer trigger; card defs have no remove/transform hook yet.
+    onRemoveFromMasterDeck: (ctx) => {
+      ctx.run.maxHp = Math.max(1, ctx.run.maxHp - 3);
+      ctx.run.hp = Math.min(ctx.run.hp, ctx.run.maxHp);
+    },
   },
   {
     id: "PRIDE",

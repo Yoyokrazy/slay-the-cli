@@ -4,22 +4,23 @@
 //    combat-only triggers (wasHPLost, bloodied hooks) do NOT fire out of combat
 //    (they enqueue combat actions that could never drain).
 //  - heals fold onHeal (Mark of the Bloom zeroes them), floor, clamp.
-//  - card obtains veto through onObtainCard (Omamori), matching runFlow's
-//    addCardToDeck; gold gains fold onGainGold (Ectoplasm, Bloody Idol),
-//    matching runFlow's gainGold.
+//  - card obtains veto through onObtainCard (Omamori) and fold egg upgrades,
+//    matching runFlow's addCardToDeck; gold gains fold onGainGold
+//    (Ectoplasm, Bloody Idol), matching runFlow's gainGold.
 //  - "screenless" random relics roll tier with relicRng (50/33/17) and pop the
 //    run-start shuffled pool, rerolling BOTTLED_* / WHETSTONE (corpus
 //    events.json meta note); popped rerolls are consumed, like the reference.
 //  - out-of-run-layer death: hp<=0 sets rt.combatOver="defeat", which game.ts
 //    finish() turns into outcome=death + gameOver room.
 
-import type { EffectCtx, EventDef, EventOption } from "../../engine/content/defs";
+import type { EffectCtx, EventDef, EventOption, MasterDeckRemovalReason } from "../../engine/content/defs";
 import type { RewardEntry, EventRoomData, MasterCard, RoomState } from "../../engine/run/runState";
 import type { CardId, PotionId, RelicId } from "../../engine/core/ids";
 import { PLAYER } from "../../engine/core/ids";
-import { foldHook, vetoHook } from "../../engine/core/hooks";
+import { foldHook } from "../../engine/core/hooks";
 import { f32mul } from "../../engine/core/math";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
+import { obtainDeckCard, removeDeckCards as removeMasterDeckCards, transformDeckCard as transformMasterDeckCard } from "../../engine/run/deck";
 import {
   cardGroupEntries,
   classCardPool,
@@ -138,8 +139,7 @@ export function loseGold(ctx: EffectCtx, amount: number): void {
 export const UNREMOVABLE_CURSES: readonly CardId[] = ["ASCENDERS_BANE", "NECRONOMICURSE", "CURSE_OF_THE_BELL"];
 
 export function obtainCard(ctx: EffectCtx, defId: CardId, upgrades = 0, misc = 0): void {
-  if (!vetoHook(ctx, PLAYER, "onObtainCard", defId)) return; // Omamori veto
-  ctx.run.deck.push({ defId, upgrades, misc, bottled: false });
+  obtainDeckCard(ctx, defId, upgrades, misc);
 }
 
 /** Curse card ids (corpus-stable) - canSpawn(run) has no bundle access. */
@@ -161,22 +161,14 @@ export const CURSE_IDS: ReadonlySet<CardId> = new Set([
 ]);
 
 /** Remove deck cards by index (descending order, duplicates ignored). */
-export function removeDeckCards(ctx: EffectCtx, indices: number[]): void {
-  const sorted = [...new Set(indices)].sort((a, b) => b - a);
-  for (const i of sorted) {
-    if (ctx.run.deck[i]) ctx.run.deck.splice(i, 1);
-  }
+export function removeDeckCards(ctx: EffectCtx, indices: number[], reason: MasterDeckRemovalReason = "event:remove"): void {
+  removeMasterDeckCards(ctx, indices, reason);
 }
 
 /** Transform: remove, then roll the replacement uniformly over the class pool
  *  (all rarities) with miscRng - identical to runFlow's runDeckChoiceResume. */
-export function transformDeckCard(ctx: EffectCtx, deckIdx: number): void {
-  if (!ctx.run.deck[deckIdx]) return;
-  ctx.run.deck.splice(deckIdx, 1);
-  const pool = [...classCardPool(ctx, "common"), ...classCardPool(ctx, "uncommon"), ...classCardPool(ctx, "rare")];
-  if (pool.length > 0) {
-    ctx.run.deck.push({ defId: pool[ctx.rng("miscRng").random(pool.length - 1)]!, upgrades: 0, misc: 0, bottled: false });
-  }
+export function transformDeckCard(ctx: EffectCtx, deckIdx: number, reason: MasterDeckRemovalReason = "event:transform"): void {
+  transformMasterDeckCard(ctx, deckIdx, 0, reason);
 }
 
 export function upgradeDeckCard(ctx: EffectCtx, deckIdx: number): void {

@@ -1,5 +1,8 @@
 import { test, expect, describe } from "bun:test";
 import { createRun, advance, type GameState } from "../../src/engine/game";
+import { transformDeckCard } from "../../src/engine/run/deck";
+import { allRelics } from "../../src/content/relics";
+import { curseCards } from "../../src/content/cards/curses";
 import { makeRunTestBundle } from "./runTestBundle";
 import { makeTestCtx, autoWinCombat, stepRun, walkUntil, runSignature } from "./runCtx";
 import { generateEncounters, getActDef } from "../../src/engine/run/encounters";
@@ -19,8 +22,92 @@ import { seedFromString } from "../../src/engine/core/rng";
 import { MAP_HEIGHT } from "../../src/engine/run/mapGen";
 
 const bundle = makeRunTestBundle();
+const parasiteBundle = makeRunTestBundle();
+const parasiteDef = curseCards.find((c) => c.id === "PARASITE");
+if (!parasiteDef) throw new Error("missing PARASITE card def");
+parasiteBundle.cards.set(parasiteDef.id, parasiteDef);
+const eggBundle = makeRunTestBundle();
+for (const id of ["FROZEN_EGG", "MOLTEN_EGG", "TOXIC_EGG"] as const) {
+  const def = allRelics.find((r) => r.id === id);
+  if (!def) throw new Error(`missing relic ${id}`);
+  eggBundle.relics.set(def.id, def);
+}
+const cursedKeyBundle = makeRunTestBundle();
+for (const id of ["CURSED_KEY", "OMAMORI"] as const) {
+  const def = allRelics.find((r) => r.id === id);
+  if (!def) throw new Error(`missing relic ${id}`);
+  cursedKeyBundle.relics.set(def.id, def);
+}
+for (const def of curseCards) cursedKeyBundle.cards.set(def.id, def);
+const matryoshkaBundle = makeRunTestBundle();
+const matryoshkaDef = allRelics.find((r) => r.id === "MATRYOSHKA");
+if (!matryoshkaDef) throw new Error("missing MATRYOSHKA relic");
+matryoshkaBundle.relics.set(matryoshkaDef.id, matryoshkaDef);
 
 const run = (seed: string, ascension = 0): GameState => createRun({ seed, bundle, character: "IRONCLAD", ascension });
+const eggRun = (seed: string): GameState => createRun({ seed, bundle: eggBundle, character: "IRONCLAD" });
+const cursedKeyRun = (seed: string): GameState => createRun({ seed, bundle: cursedKeyBundle, character: "IRONCLAD" });
+const matryoshkaRun = (seed: string): GameState => createRun({ seed, bundle: matryoshkaBundle, character: "IRONCLAD" });
+
+function putTreasureRoom(s: GameState): void {
+  s.run.room = {
+    kind: "treasure",
+    chest: { size: "small", goldPresent: false, relicTier: "common", sapphireKeyAvailable: true, opened: false },
+  };
+}
+
+function curseCount(s: GameState): number {
+  return s.run.deck.filter((c) => cursedKeyBundle.cards.get(c.defId)?.type === "curse").length;
+}
+
+function openMatryoshkaChest(s: GameState): { state: GameState; gained: number } {
+  putTreasureRoom(s);
+  const before = s.run.relics.length;
+  const state = advance(s, { cmd: "openChest" }, matryoshkaBundle);
+  return { state, gained: state.run.relics.length - before };
+}
+
+function matryoshkaCounter(s: GameState): number | undefined {
+  return s.run.relics.find((r) => r.defId === "MATRYOSHKA")?.counter;
+}
+
+function giveMatryoshka(s: GameState): void {
+  s.run.relics.push({ defId: "MATRYOSHKA", counter: 2 });
+  s.run.pools.uncommonRelics = s.run.pools.uncommonRelics.filter((id) => id !== "MATRYOSHKA");
+}
+
+function singingBowlRewardRun(): GameState {
+  const s = run("BOWL");
+  s.run.hp = 40;
+  s.run.maxHp = 80;
+  s.run.relics.push({ defId: "SINGING_BOWL", counter: 0 });
+  s.run.room = {
+    kind: "rewards",
+    source: "monster",
+    entries: [
+      { kind: "card", group: 0, id: "T_COMMON_ATK_A", rarity: "common", upgraded: false, taken: false },
+      { kind: "card", group: 0, id: "T_COMMON_SKL_A", rarity: "common", upgraded: false, taken: false },
+      { kind: "card", group: 0, id: "T_COMMON_PWR_A", rarity: "common", upgraded: false, taken: false },
+    ],
+  };
+  return s;
+}
+
+function cardRemovalRun(defId: string): GameState {
+  const s = createRun({ seed: `REMOVE-${defId}`, bundle: parasiteBundle, character: "IRONCLAD" });
+  s.run.hp = 80;
+  s.run.maxHp = 80;
+  s.run.gold = 0;
+  s.run.deck = [
+    { defId, upgrades: 0, misc: 0, bottled: false },
+    { defId: "T_DEFEND", upgrades: 0, misc: 0, bottled: false },
+  ];
+  s.run.room = {
+    kind: "shop",
+    shop: { cards: [], relics: [], potions: [], removalCost: 0, removalUsed: false },
+  };
+  return s;
+}
 
 describe("createRun determinism", () => {
   test("same seed -> byte-identical state; different seed differs", () => {
@@ -83,6 +170,66 @@ describe("run initialization", () => {
   test("relic pool shuffle consumes exactly 5 relicRng longs", () => {
     const s = run("RELICRNG");
     expect(s.rng.run.relicRng.counter).toBe(5);
+  });
+});
+
+describe("master deck obtain hooks", () => {
+  for (const c of [
+    { relic: "FROZEN_EGG", card: "T_UNCOMMON_PWR_A" },
+    { relic: "MOLTEN_EGG", card: "T_UNCOMMON_ATK_A" },
+    { relic: "TOXIC_EGG", card: "T_UNCOMMON_SKL_A" },
+  ] as const) {
+    test(`${c.relic} upgrades matching shop card purchases`, () => {
+      let s = eggRun(`SHOP-${c.relic}`);
+      s.run.gold = 999;
+      s.run.relics.push({ defId: c.relic, counter: 0 });
+      s.run.room = {
+        kind: "shop",
+        shop: {
+          cards: Array.from({ length: 7 }, () => ({ id: c.card, rarity: "uncommon" as const, price: 1, sold: false, colorless: false })),
+          relics: Array.from({ length: 3 }, () => ({ id: "T_RELIC_C_A", tier: "common" as const, price: 999, sold: false })),
+          potions: Array.from({ length: 3 }, () => ({ id: "T_POT_C_A", price: 999, sold: false })),
+          removalCost: 999,
+          removalUsed: false,
+        },
+      };
+
+      s = advance(s, { cmd: "shopBuy", kind: "card", idx: 0 }, eggBundle);
+      const bought = s.run.deck[s.run.deck.length - 1]!;
+      expect(bought.defId).toBe(c.card);
+      expect(bought.upgrades).toBe(1);
+    });
+  }
+});
+
+describe("master deck removal hooks", () => {
+  test("shop removal of Parasite lowers max HP and clamps current HP", () => {
+    const s = advance(cardRemovalRun("PARASITE"), { cmd: "shopRemove", deckIdx: 0 }, parasiteBundle);
+
+    expect(s.run.maxHp).toBe(77);
+    expect(s.run.hp).toBe(77);
+    expect(s.run.deck.map((c) => c.defId)).toEqual(["T_DEFEND"]);
+  });
+
+  test("transforming Parasite lowers max HP and clamps current HP", () => {
+    const s = cardRemovalRun("PARASITE");
+    const { ctx, saveRng } = makeTestCtx(s, parasiteBundle);
+
+    transformDeckCard(ctx, 0);
+    saveRng();
+
+    expect(s.run.maxHp).toBe(77);
+    expect(s.run.hp).toBe(77);
+    expect(s.run.deck).toHaveLength(2);
+    expect(s.run.deck.some((c) => c.defId === "PARASITE")).toBe(false);
+  });
+
+  test("removing a normal card leaves max HP unchanged", () => {
+    const s = advance(cardRemovalRun("T_STRIKE"), { cmd: "shopRemove", deckIdx: 0 }, parasiteBundle);
+
+    expect(s.run.maxHp).toBe(80);
+    expect(s.run.hp).toBe(80);
+    expect(s.run.deck.map((c) => c.defId)).toEqual(["T_DEFEND"]);
   });
 });
 
@@ -263,6 +410,24 @@ describe("map flow", () => {
     s = advance(s, { cmd: "skipRewards" }, bundle);
     expect(s.run.room!.kind).toBe("map");
     expect(s.run.history.combatsThisAct).toBe(1);
+  });
+
+  test("Singing Bowl reward raises current and max HP instead of taking a card", () => {
+    const s = singingBowlRewardRun();
+    const deckBefore = s.run.deck.length;
+    const after = advance(s, { cmd: "takeSingingBowlReward", group: 0 }, bundle);
+    expect(after.run.maxHp).toBe(82);
+    expect(after.run.hp).toBe(42);
+    expect(after.run.deck.length).toBe(deckBefore);
+    const room = after.run.room;
+    if (room?.kind !== "rewards") throw new Error("expected rewards");
+    expect(room.entries.every((e) => e.kind !== "card" || e.taken)).toBe(true);
+    expect(() => advance(after, { cmd: "takeReward", i: 0 }, bundle)).toThrow("already taken");
+  });
+
+  test("Singing Bowl reward cannot be used twice for the same card group", () => {
+    const after = advance(singingBowlRewardRun(), { cmd: "takeSingingBowlReward", group: 0 }, bundle);
+    expect(() => advance(after, { cmd: "takeSingingBowlReward", group: 0 }, bundle)).toThrow("already taken");
   });
 
   test("player death in a run sets outcome and gameOver room", () => {
@@ -545,6 +710,113 @@ describe("potions", () => {
     s = advance(s, { cmd: "discardPotion", slot: 1 }, bundle);
     expect(s.run.potions[1]).toBeNull();
     expect(() => advance(s, { cmd: "usePotion", slot: 0 }, bundle)).toThrow("no potion");
+  });
+});
+
+describe("Cursed Key", () => {
+  test("opening a non-boss chest obtains a random standard curse", () => {
+    let s = cursedKeyRun("CK-CHEST");
+    s.run.relics.push({ defId: "CURSED_KEY", counter: 0 });
+    putTreasureRoom(s);
+
+    s = advance(s, { cmd: "openChest" }, cursedKeyBundle);
+
+    expect(curseCount(s)).toBe(1);
+    const obtained = s.run.deck[s.run.deck.length - 1]!;
+    expect(cursedKeyBundle.cards.get(obtained.defId)?.rarity).toBe("curse");
+  });
+
+  test("opening a chest without Cursed Key does not add a curse", () => {
+    let s = cursedKeyRun("CK-NONE");
+    putTreasureRoom(s);
+
+    s = advance(s, { cmd: "openChest" }, cursedKeyBundle);
+
+    expect(curseCount(s)).toBe(0);
+  });
+
+  test("taking the Sapphire Key still counts as opening the chest", () => {
+    let s = cursedKeyRun("CK-SAPPHIRE");
+    s.run.relics.push({ defId: "CURSED_KEY", counter: 0 });
+    putTreasureRoom(s);
+
+    s = advance(s, { cmd: "takeSapphireKey" }, cursedKeyBundle);
+
+    expect(s.run.keys.sapphire).toBe(true);
+    expect(curseCount(s)).toBe(1);
+  });
+
+  test("boss relic rewards do not count as non-boss chests", () => {
+    let s = cursedKeyRun("CK-BOSS");
+    s.run.relics.push({ defId: "CURSED_KEY", counter: 0 });
+    s.run.room = {
+      kind: "rewards",
+      source: "boss",
+      entries: [{ kind: "bossRelic", group: 0, id: "T_RELIC_B_A", taken: false }],
+    };
+
+    s = advance(s, { cmd: "takeReward", i: 0 }, cursedKeyBundle);
+
+    expect(s.run.relics.map((r) => r.defId)).toContain("T_RELIC_B_A");
+    expect(curseCount(s)).toBe(0);
+  });
+
+  test("Cursed Key obtains through the deck-add path so Omamori can veto it", () => {
+    let s = cursedKeyRun("CK-OMAMORI");
+    s.run.relics.push({ defId: "CURSED_KEY", counter: 0 }, { defId: "OMAMORI", counter: 1 });
+    putTreasureRoom(s);
+
+    s = advance(s, { cmd: "openChest" }, cursedKeyBundle);
+
+    expect(curseCount(s)).toBe(0);
+    expect(s.run.relics.find((r) => r.defId === "OMAMORI")?.counter).toBe(0);
+  });
+
+  test("Omamori from the same chest is not equipped in time to block the curse", () => {
+    let s = cursedKeyRun("CK-SAME-CHEST-OMAMORI");
+    s.run.relics.push({ defId: "CURSED_KEY", counter: 0 });
+    s.run.pools.commonRelics = ["OMAMORI"];
+    putTreasureRoom(s);
+
+    s = advance(s, { cmd: "openChest" }, cursedKeyBundle);
+
+    expect(curseCount(s)).toBe(1);
+    expect(s.run.relics.find((r) => r.defId === "OMAMORI")?.counter).toBe(2);
+  });
+});
+
+describe("Matryoshka", () => {
+  test("adds an extra relic to the next two non-boss chests, then becomes used up", () => {
+    let s = matryoshkaRun("MATRYOSHKA");
+    giveMatryoshka(s);
+
+    let opened = openMatryoshkaChest(s);
+    s = opened.state;
+    expect(opened.gained).toBe(2);
+    expect(matryoshkaCounter(s)).toBe(1);
+
+    opened = openMatryoshkaChest(s);
+    s = opened.state;
+    expect(opened.gained).toBe(2);
+    expect(matryoshkaCounter(s)).toBe(-2);
+
+    opened = openMatryoshkaChest(s);
+    s = opened.state;
+    expect(opened.gained).toBe(1);
+    expect(matryoshkaCounter(s)).toBe(-2);
+  });
+
+  test("taking the Sapphire Key still grants Matryoshka's extra relic", () => {
+    let s = matryoshkaRun("MATRYOSHKA-KEY");
+    giveMatryoshka(s);
+    putTreasureRoom(s);
+    const before = s.run.relics.length;
+
+    s = advance(s, { cmd: "takeSapphireKey" }, matryoshkaBundle);
+
+    expect(s.run.keys.sapphire).toBe(true);
+    expect(s.run.relics.length - before).toBe(1);
+    expect(matryoshkaCounter(s)).toBe(1);
   });
 });
 

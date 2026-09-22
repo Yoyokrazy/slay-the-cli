@@ -1,7 +1,8 @@
 // Intent display numbers - exactly what the game shows: the move's damage run
 // through the live calc pipeline (Strength, Weak, Vulnerable-on-player, etc.).
 //
-// Rather than duplicating per-move damage tables, we DRY-RUN the move's
+// Explicit read-only attack previews bypass execute, including cosmetic dialog
+// RNG. Otherwise, rather than duplicating per-move damage tables, we DRY-RUN the move's
 // execute() against a structuredClone of the state with a throwaway queue and
 // a poisoned RNG, then read the enqueued actions without applying them.
 // Moves whose preview would need randomness or a choice fall back to
@@ -44,6 +45,8 @@ export interface IntentInfo {
   summons: string[];
   /** HP it takes from you outside an attack */
   hpLoss: number;
+  /** Up to this much current gold can be stolen; another enemy may steal first. */
+  goldLoss: number;
   /** the preview stopped early (the move rolls dice or asks a question part
    *  way through), so what is here is what it does FIRST, not all of it */
   partial: boolean;
@@ -70,6 +73,7 @@ export function computeIntent(ctx: EffectCtx, idx: number): IntentInfo | null {
     heal: 0,
     summons: [],
     hpLoss: 0,
+    goldLoss: 0,
     partial: true,
   };
   try {
@@ -90,6 +94,16 @@ export function computeIntent(ctx: EffectCtx, idx: number): IntentInfo | null {
         throw new Error("choice not available in intent dry-run");
       },
     };
+    if (move.displayDamage) {
+      const preview = move.displayDamage(dryCtx, combatClone.monsters[idx]!);
+      return preview === null ? fallback : {
+        ...fallback,
+        damage: preview.damage,
+        hits: preview.hits,
+        goldLoss: preview.goldLoss ?? 0,
+        partial: preview.partial ?? true,
+      };
+    }
     // Powers are applied straight to the target rather than queued, so read
     // them by diffing the clone the dry-run mutated. That also means the
     // preview accounts for Artifact eating a debuff, exactly as the turn will.
@@ -179,6 +193,7 @@ export function computeIntent(ctx: EffectCtx, idx: number): IntentInfo | null {
       heal,
       summons,
       hpLoss,
+      goldLoss: 0,
       partial,
     };
   } catch {

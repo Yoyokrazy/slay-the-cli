@@ -5,7 +5,7 @@
 import { test, expect, describe } from "bun:test";
 import { createCombatGame, type GameState } from "../../src/engine/game";
 import type { ContentBundle } from "../../src/engine/content/defs";
-import { getCardPreviews, previewCardAt } from "../../src/engine/combat/preview";
+import { getCardPlayability, getCardPreviews, previewCardAt } from "../../src/engine/combat/preview";
 import { makeTestBundle } from "../helpers/testBundle";
 import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
@@ -31,6 +31,81 @@ function game(deck: string[], monsters = ["T_DUMMY"]): GameState {
     monsters,
   });
 }
+
+describe("card playability previews", () => {
+  test("free and X-cost cards still obey canUse; unplayable sentinel stays blocked", () => {
+    const s = game(["CLASH", "DEFEND_RED"]);
+    const c = s.combat!;
+    const clash = c.cards[c.player.piles.hand.find(iid => c.cards[iid]!.defId === "CLASH")!]!;
+    c.player.energy = 0;
+    for (const cost of [0, -1, -2]) {
+      clash.cost = cost;
+      clash.freeToPlayOnce = true;
+      expect(getCardPlayability(s, B, clash)).toEqual({ cost, playable: false });
+      const hand = c.player.piles.hand;
+      c.player.piles.hand = [clash.iid];
+      expect(getCardPlayability(s, B, clash)).toEqual({ cost, playable: cost !== -2 });
+      c.player.piles.hand = hand;
+    }
+    clash.cost = -1;
+    clash.freeToPlayOnce = false;
+    c.player.piles.hand = [clash.iid];
+    expect(getCardPlayability(s, B, clash)).toEqual({ cost: -1, playable: true });
+  });
+
+  test("canUse and veto hooks share cloned card state, with no live writes or queue execution", () => {
+    const b = makeBundle();
+    const s = game(["STRIKE_RED"]);
+    const c = s.combat!;
+    const card = c.cards[c.player.piles.hand[0]!]!;
+    card.upgrades = 1;
+    const def = b.cards.get(card.defId)!;
+    b.cards.set(card.defId, { ...def, canUse: ctx => {
+      expect(ctx.card).toBe(ctx.combat!.cards[card.iid]!);
+      expect(ctx.energyOnUse).toBe(c.player.energy);
+      expect(ctx.upgraded).toBe(true);
+      expect(ctx.target).toBe(0);
+      ctx.run.gold = 0;
+      ctx.card.misc++;
+      ctx.combat!.player.block++;
+      ctx.queue.addToBottom({ kind: "gainBlock", target: { kind: "player" }, amount: 100, fromCard: true });
+      return true;
+    }, onPlay: () => { throw new Error("playability must not play the card"); } });
+    b.relics.set("PREVIEW_GUARD", {
+      id: "PREVIEW_GUARD", name: "Preview guard", tier: "common", pool: "shared",
+      hooks: { canPlayCard: (ctx, checked) => {
+        expect(checked.misc).toBe(card.misc + 1);
+        ctx.relicCounter!.set(7);
+        return false;
+      } },
+    });
+    s.run.relics.push({ defId: "PREVIEW_GUARD", counter: 0 });
+    const before = structuredClone(s);
+    expect(getCardPlayability(s, b, card)).toEqual({ cost: 1, playable: false });
+    expect(s).toEqual(before);
+  });
+
+  test("guard errors, RNG and choices fail explicitly without changing state", () => {
+    const b = makeBundle();
+    const s = game(["STRIKE_RED"]);
+    const card = s.combat!.cards[s.combat!.player.piles.hand[0]!]!;
+    const def = b.cards.get(card.defId)!;
+    const before = structuredClone(s);
+    b.cards.set(card.defId, { ...def, canUse: ctx => {
+      ctx.rng("mathUtilRng");
+      return true;
+    } });
+    expect(() => getCardPlayability(s, b, card)).toThrow("rng not available");
+    b.cards.set(card.defId, { ...def, canUse: ctx => {
+      ctx.requestChoice({ request: { kind: "option", reason: "test", options: ["test"] }, resume: "test", resumeArgs: {} });
+      return true;
+    } });
+    expect(() => getCardPlayability(s, b, card)).toThrow("choice not available");
+    b.cards.set(card.defId, { ...def, canUse: () => { throw new Error("guard failed"); } });
+    expect(() => getCardPlayability(s, b, card)).toThrow("guard failed");
+    expect(s).toEqual(before);
+  });
+});
 
 /** Preview of the hand slot holding defId (the whole deck is dealt). */
 function previewOf(s: GameState, defId: string, target = 0) {

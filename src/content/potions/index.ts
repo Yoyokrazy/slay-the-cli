@@ -10,6 +10,7 @@
 // contentEffects (registered lazily + exported for static bundle merge).
 
 import type { EffectCtx, PotionDef } from "../../engine/content/defs";
+import { needsEnemyTarget } from "../../engine/content/targeting";
 import { PLAYER, monster } from "../../engine/core/ids";
 import { drawCards } from "../../engine/combat/piles";
 import { hasRelic } from "../util";
@@ -200,7 +201,7 @@ export const allPotions: PotionDef[] = [
       for (const iid of top) {
         const def = ctx.bundle.cards.get(combat.cards[iid]!.defId);
         let target: number | null = null;
-        if (def && (def.target === "enemy" || def.target === "selfandenemy")) {
+        if (def && needsEnemyTarget(def.target)) {
           const alive = aliveMonsterIdxs(ctx);
           if (alive.length === 0) continue;
           target = alive[ctx.rng("cardRandomRng").random(alive.length - 1)]!;
@@ -313,7 +314,7 @@ export const allPotions: PotionDef[] = [
   },
   {
     // "When you would die, heal to [30%|60%] of Max HP instead."
-    // ENGINE-GAP: non-drinkable death-save; playerDeath has no hook yet.
+    // Non-drinkable; the combat death-save hook consumes it from the belt.
     id: "FAIRY_POTION",
     name: "Fairy in a Bottle",
     rarity: "rare",
@@ -321,6 +322,7 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 30,
     sacredBarkDoubles: true,
+    canUse: () => false,
     onUse: () => {},
   },
   {

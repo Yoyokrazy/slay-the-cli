@@ -14,6 +14,7 @@ import type { EffectCtx, EffectFn } from "../../engine/content/defs";
 import type { CardId, RelicId } from "../../engine/core/ids";
 import type { RewardEntry } from "../../engine/run/runState";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
+import { removeDeckCard } from "../../engine/run/deck";
 import { canSmith } from "../../engine/run/rest";
 import { classCardPool, createCardReward, nextRewardGroup, potionPool } from "../../engine/run/rewards";
 import {
@@ -115,7 +116,7 @@ const relicPickupChoice: EffectFn = (ctx, args) => {
     if (mc) mc.bottled = true;
     return;
   }
-  removeDeckCards(ctx, picked);
+  removeDeckCards(ctx, picked, relicId === "ASTROLABE" ? "relic:transform" : "relic:remove");
   // Astrolabe transforms what it removed, upgraded (chooseSelectCardScreenOption,
   // TRANSFORM_UPGRADE); Empty Cage just removes.
   if (relicId === "ASTROLABE") {
@@ -182,7 +183,7 @@ export function pandorasBoxPickup(ctx: EffectCtx): void {
   let count = 0;
   for (let i = deck.length - 1; i >= 0; i--) {
     if (STARTER_STRIKES_AND_DEFENDS.has(deck[i]!.defId)) {
-      deck.splice(i, 1);
+      removeDeckCard(ctx, i, "relic:pandorasBox");
       count++;
     }
   }

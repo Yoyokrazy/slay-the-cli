@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
-import { createRun } from "../../src/engine/game";
+import { advance, createRun } from "../../src/engine/game";
+import type { RewardEntry, RoomState } from "../../src/engine/run/runState";
 import { makeRunTestBundle } from "./runTestBundle";
 import { makeTestCtx } from "./runCtx";
 import {
@@ -13,13 +14,53 @@ import {
 } from "../../src/engine/run/rewards";
 import { setupTreasureRoom, openChestContents, CHESTS } from "../../src/engine/run/treasure";
 import { generateShop, computeRemovalCost, SHOP } from "../../src/engine/run/shop";
+import { handleCombatVictory } from "../../src/engine/run/runFlow";
+import { buildCombatState } from "../../src/engine/combat/setup";
+import { looter } from "../../src/content/monsters/act1/looter";
+import { mugger } from "../../src/content/monsters/act2/mugger";
 
 const bundle = makeRunTestBundle();
+bundle.monsters.set(looter.id, looter);
+bundle.monsters.set(mugger.id, mugger);
 
 function ctxFor(seed: string, ascension = 0) {
   const s = createRun({ seed, bundle, character: "IRONCLAD", ascension });
   const { ctx } = makeTestCtx(s, bundle);
   return { s, ctx };
+}
+
+function finishThiefCombatRewards(
+  seed: string,
+  thieves: { id: "LOOTER" | "MUGGER"; stolenGold: number; escaped: boolean }[],
+): RewardEntry[] {
+  const s = createRun({ seed, bundle, character: "IRONCLAD" });
+  const character = bundle.characters.get(s.run.character)!;
+  const combat = buildCombatState(
+    s.run,
+    bundle,
+    thieves.length === 1 ? thieves[0]!.id : "TWO_THIEVES",
+    thieves.map((t) => t.id),
+    character.startingEnergy,
+    character.orbSlots,
+    "monster",
+  );
+  thieves.forEach((thief, i) => {
+    const monster = combat.monsters[i]!;
+    monster.isDead = !thief.escaped;
+    monster.isEscaped = thief.escaped;
+    monster.data.stolenGold = thief.stolenGold;
+  });
+  s.combat = combat;
+  s.run.room = { kind: "combat", roomKind: "monster", encounterId: combat.combatFlags.encounterId, burningElite: false };
+  const { ctx, registry } = makeTestCtx(s, bundle);
+  handleCombatVictory(s, ctx, registry);
+  const room = (s.run as { room: RoomState | null }).room;
+  if (room?.kind !== "rewards") throw new Error("expected rewards room");
+  return room.entries;
+}
+
+function goldRewardAmounts(entries: RewardEntry[]): number[] {
+  return entries.flatMap((e) => e.kind === "gold" ? [e.amount] : []);
 }
 
 describe("card reward pity (cardRarityFactor)", () => {
@@ -100,6 +141,26 @@ describe("card reward pity (cardRarityFactor)", () => {
     }
   });
 
+  test("Question Card and Busted Crown compose when sizing card rewards", () => {
+    const crown = ctxFor("CROWN");
+    crown.s.run.relics.push({ defId: "BUSTED_CROWN", counter: 0 });
+    expect(createCardReward(crown.ctx, "monster")).toHaveLength(1);
+
+    const question = ctxFor("QUESTION");
+    question.s.run.relics.push({ defId: "QUESTION_CARD", counter: 0 });
+    expect(createCardReward(question.ctx, "monster")).toHaveLength(4);
+
+    const both = ctxFor("CROWNQUESTION");
+    both.s.run.relics.push({ defId: "QUESTION_CARD", counter: 0 }, { defId: "BUSTED_CROWN", counter: 0 });
+    expect(createCardReward(both.ctx, "monster")).toHaveLength(2);
+  });
+
+  test("Busted Crown cannot reduce a card reward below one card", () => {
+    const { s, ctx } = ctxFor("CROWNMIN");
+    s.run.relics.push({ defId: "BUSTED_CROWN", counter: 0 }, { defId: "BUSTED_CROWN", counter: 0 });
+    expect(createCardReward(ctx, "monster")).toHaveLength(1);
+  });
+
   test("upgrades: act 1 never; act 3 asc 0 sometimes (never on rares)", () => {
     const { ctx } = ctxFor("UPG1");
     for (let i = 0; i < 20; i++) {
@@ -156,6 +217,50 @@ describe("potion drop pity", () => {
     }
     expect([...seen].sort()).toEqual(["common", "rare", "uncommon"]);
   });
+
+  test("Sozu suppresses potion reward rolls without advancing pity or potion RNG", () => {
+    const { s, ctx } = ctxFor("SOZU-POTION-REWARD");
+    s.run.relics.push({ defId: "SOZU", counter: 0 });
+    s.run.blizzard.potionChance = 60;
+    const counter = ctx.rng("potionRng").counter;
+    expect(rollPotionReward(ctx, 1)).toBeNull();
+    expect(s.run.blizzard.potionChance).toBe(60);
+    expect(ctx.rng("potionRng").counter).toBe(counter);
+  });
+
+  test("Sozu suppresses random potion sources and shop potion slots", () => {
+    const { s, ctx } = ctxFor("SOZU-RANDOM-POTION");
+    s.run.relics.push({ defId: "SOZU", counter: 0 });
+    expect(returnRandomPotion(ctx)).toBeNull();
+    expect(generateShop(ctx).potions).toHaveLength(0);
+  });
+
+  test("Sozu prevents taking or buying pre-existing potion entries", () => {
+    const reward = ctxFor("SOZU-TAKE-POTION");
+    reward.s.run.relics.push({ defId: "SOZU", counter: 0 });
+    reward.s.run.room = {
+      kind: "rewards",
+      source: "event",
+      entries: [{ kind: "potion", id: "T_POT_C_A", taken: false }],
+    };
+    expect(() => advance(reward.s, { cmd: "takeReward", i: 0 }, bundle)).toThrow("a relic prevents obtaining potions");
+
+    const shop = ctxFor("SOZU-BUY-POTION");
+    shop.s.run.relics.push({ defId: "SOZU", counter: 0 });
+    shop.s.run.room = {
+      kind: "shop",
+      shop: {
+        cards: [],
+        relics: [],
+        potions: [{ id: "T_POT_C_A", price: 0, sold: false }],
+        removalCost: 0,
+        removalUsed: false,
+      },
+    };
+    expect(() => advance(shop.s, { cmd: "shopBuy", kind: "potion", idx: 0 }, bundle)).toThrow(
+      "a relic prevents obtaining potions",
+    );
+  });
 });
 
 describe("gold rewards", () => {
@@ -190,6 +295,30 @@ describe("gold rewards", () => {
     b.s.run.relics.push({ defId: "GOLDEN_IDOL", counter: 0 });
     const idol = rollGoldReward(b.ctx, "monster");
     expect(idol).toBe(plain + Math.round(plain * 0.25));
+  });
+
+  test("killed Looter refunds stolen gold as an extra reward", () => {
+    const entries = finishThiefCombatRewards("THIEF-KILLED", [{ id: "LOOTER", stolenGold: 30, escaped: false }]);
+    const amounts = goldRewardAmounts(entries);
+    expect(amounts).toContain(30);
+    expect(amounts).toHaveLength(2);
+  });
+
+  test("escaped Looter does not refund stolen gold", () => {
+    const entries = finishThiefCombatRewards("THIEF-ESCAPED", [{ id: "LOOTER", stolenGold: 30, escaped: true }]);
+    const amounts = goldRewardAmounts(entries);
+    expect(amounts).not.toContain(30);
+    expect(amounts).toHaveLength(1);
+  });
+
+  test("multiple killed thieves combine into one stolen gold reward", () => {
+    const entries = finishThiefCombatRewards("TWO-THIEVES", [
+      { id: "LOOTER", stolenGold: 15, escaped: false },
+      { id: "MUGGER", stolenGold: 20, escaped: false },
+    ]);
+    const amounts = goldRewardAmounts(entries);
+    expect(amounts).toContain(35);
+    expect(amounts).toHaveLength(2);
   });
 });
 

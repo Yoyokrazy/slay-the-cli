@@ -9,6 +9,7 @@ import type { CardId, PotionId, RelicId } from "../core/ids";
 import type { Rng } from "../core/rng";
 import type { RolledCard } from "./rewards";
 import { classCardPool, colorlessCardPool, cursePool, returnRandomPotion, obtainRelicFromPool } from "./rewards";
+import { obtainDeckCard } from "./deck";
 
 // --- tables (meta.neow; audited by tests/audit/metaAudit.test.ts) -------------------
 
@@ -155,8 +156,9 @@ export function applyNeowDrawback(ctx: EffectCtx, drawback: NeowDrawback): void 
       const curses = cursePool(ctx);
       if (curses.length > 0) {
         const id = curses[ctx.rng("cardRng").random(curses.length - 1)]!;
-        run.deck.push({ defId: id, upgrades: 0, misc: 0, bottled: false });
-        ctx.emit("deckCardObtained", { defId: id, upgrades: 0 });
+        const before = run.deck.length;
+        obtainDeckCard(ctx, id);
+        if (run.deck.length > before) ctx.emit("deckCardObtained", { defId: id, upgrades: run.deck[run.deck.length - 1]!.upgrades });
       }
       break;
     }
@@ -194,9 +196,10 @@ export function applyNeowBonus(ctx: EffectCtx, bonus: NeowBonus): NeowFollowUp {
       const pool = classCardPool(ctx, "rare");
       if (pool.length === 0) throw new Error("empty rare pool");
       const id = pool[ctx.rng("neowRng").random(pool.length - 1)]!;
-      run.deck.push({ defId: id, upgrades: 0, misc: 0, bottled: false });
+      const before = run.deck.length;
+      obtainDeckCard(ctx, id);
       // the card lands with no screen of its own: the UI reads this to say which
-      ctx.emit("deckCardObtained", { defId: id, upgrades: 0 });
+      if (run.deck.length > before) ctx.emit("deckCardObtained", { defId: id, upgrades: run.deck[run.deck.length - 1]!.upgrades });
       return null;
     }
     case "REMOVE_CARD":

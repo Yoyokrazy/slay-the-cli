@@ -6,6 +6,7 @@ import type { HookCtx } from "../../engine/core/hooks";
 import { f32add } from "../../engine/core/math";
 import { PLAYER } from "../../engine/core/ids";
 import { moveCard } from "../../engine/combat/piles";
+import { obtainRelicFromPool } from "../../engine/run/rewards";
 import { cnt, effectiveKeywords, healPlayer, relicDamageAll } from "./lib";
 import { bottlePickup } from "./pickup";
 
@@ -396,11 +397,14 @@ export const uncommonRelics: RelicDef[] = [
     name: "Frozen Egg",
     tier: "uncommon",
     pool: "shared",
-    hooks: {},
+    hooks: {
+      modifyObtainedCardUpgrades: (ctx, upgrades, defId) =>
+        ctx.bundle.cards.get(defId)?.type === "power" ? Math.max(upgrades, 1) : upgrades,
+    },
   },
   {
-    // "The next 2 non-boss chests you open contain 2 Relics." RUN-LAYER: relic
-    // generation lives in the treasure layer; counter initialized on pickup.
+    // "The next 2 non-boss chests you open contain 2 Relics." RUN-LAYER:
+    // counter initialized on pickup; the chest flow grants queued extras.
     id: "MATRYOSHKA",
     name: "Matryoshka",
     countsDown: true,
@@ -410,7 +414,17 @@ export const uncommonRelics: RelicDef[] = [
       const r = ctx.run.relics.find((x) => x.defId === "MATRYOSHKA");
       if (r) r.counter = 2;
     },
-    hooks: {},
+    hooks: {
+      onChestOpen: (ctx, isBossChest, extraRelics) => {
+        if (isBossChest) return;
+        const counter = cnt(ctx).get();
+        if (counter <= 0) return;
+        const remaining = counter - 1;
+        cnt(ctx).set(remaining === 0 ? -2 : remaining);
+        const tier = ctx.rng("relicRng").randomBoolean(0.75) ? "common" : "uncommon";
+        extraRelics.push(obtainRelicFromPool(ctx.run, tier));
+      },
+    },
   },
   {
     // "Whenever you add an Attack card to your deck, Upgrade it." RUN-LAYER.
@@ -418,7 +432,10 @@ export const uncommonRelics: RelicDef[] = [
     name: "Molten Egg",
     tier: "uncommon",
     pool: "shared",
-    hooks: {},
+    hooks: {
+      modifyObtainedCardUpgrades: (ctx, upgrades, defId) =>
+        ctx.bundle.cards.get(defId)?.type === "attack" ? Math.max(upgrades, 1) : upgrades,
+    },
   },
   {
     // "Upon pickup, raise your Max HP by 10."
@@ -441,7 +458,7 @@ export const uncommonRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "When adding cards to your deck, you may raise your Max HP by 2 instead." RUN-LAYER.
+    // "When adding cards to your deck, you may raise your Max HP by 2 instead." Implemented in reward flow.
     id: "SINGING_BOWL",
     name: "Singing Bowl",
     tier: "uncommon",
@@ -463,7 +480,10 @@ export const uncommonRelics: RelicDef[] = [
     name: "Toxic Egg",
     tier: "uncommon",
     pool: "shared",
-    hooks: {},
+    hooks: {
+      modifyObtainedCardUpgrades: (ctx, upgrades, defId) =>
+        ctx.bundle.cards.get(defId)?.type === "skill" ? Math.max(upgrades, 1) : upgrades,
+    },
   },
   {
     // "Potions always appear in combat rewards." RUN-LAYER (reward generation).

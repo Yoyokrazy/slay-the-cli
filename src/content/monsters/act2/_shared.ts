@@ -12,6 +12,7 @@ export {
   playerPower,
   powerAmount,
   prePower,
+  previewThievingAttack,
   replaceIntent,
   selfBlock,
   selfPower,

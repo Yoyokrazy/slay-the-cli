@@ -11,6 +11,7 @@ import type { CombatState } from "./combat/combatState";
 import type { RunState } from "./run/runState";
 import type { PendingChoice } from "./core/actions";
 import type { ContentBundle, EffectCtx } from "./content/defs";
+import { needsEnemyTarget } from "./content/targeting";
 import { ActionQueue } from "./core/queue";
 import { RngRegistry, type RngRegistryState, type Stream } from "./core/rngRegistry";
 import { seedFromString, seedToString } from "./core/rng";
@@ -44,6 +45,7 @@ export type RunCommand =
   | { cmd: "neowPick"; i: number }
   | { cmd: "mapPick"; x: number; y: number }
   | { cmd: "takeReward"; i: number }
+  | { cmd: "takeSingingBowlReward"; group: number }
   | { cmd: "skipRewards" }
   | { cmd: "shopBuy"; kind: "card" | "relic" | "potion"; idx: number }
   | { cmd: "shopRemove"; deckIdx: number }
@@ -257,7 +259,7 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
       if (c.cost === -2) throw new Error("unplayable card");
       const cost = c.cost === -1 ? 0 : effectiveCost(ctx, c);
       if (!c.freeToPlayOnce && combat.player.energy < cost) throw new Error("not enough energy");
-      if (def.target === "enemy") {
+      if (needsEnemyTarget(def.target)) {
         if (cmd.target === undefined) throw new Error("target required");
         const t = combat.monsters[cmd.target];
         if (!t || t.isDead || t.isEscaped) throw new Error("invalid target");
@@ -329,6 +331,7 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
     case "neowPick":
     case "mapPick":
     case "takeReward":
+    case "takeSingingBowlReward":
     case "skipRewards":
     case "shopBuy":
     case "shopRemove":

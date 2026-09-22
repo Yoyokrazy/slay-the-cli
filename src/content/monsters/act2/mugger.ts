@@ -13,7 +13,10 @@
 import type { MonsterDef, EffectCtx } from "../../../engine/content/defs";
 import type { MonsterState } from "../../../engine/combat/combatState";
 import { firstTurn, lastMove } from "../../util";
-import { attackPlayer, powerAmount, prePower, selfBlock } from "./_shared";
+import { attackPlayer, powerAmount, prePower, previewThievingAttack, selfBlock } from "./_shared";
+
+const mugDamage = (asc: number): number => asc >= 2 ? 11 : 10;
+const lungeDamage = (asc: number): number => asc >= 2 ? 18 : 16;
 
 function stealGold(ctx: EffectCtx, self: MonsterState): void {
   const stolen = Math.min(ctx.run.gold, powerAmount(self, "THIEVERY"));
@@ -33,20 +36,22 @@ export const mugger: MonsterDef = {
     MUGGER_MUG: {
       id: "MUGGER_MUG",
       intent: "attack",
+      displayDamage: (ctx, self) => previewThievingAttack(ctx, self, mugDamage(ctx.asc)),
       execute: (ctx, self) => {
         ctx.rng("aiRng").random(2); // dialog roll (consumed for parity, unused)
         if (ctx.combat!.turn === 2) ctx.rng("aiRng").randomBoolean(0.6); // extra turn-2 dialog roll
         stealGold(ctx, self);
-        attackPlayer(ctx, self, ctx.asc >= 2 ? 11 : 10);
+        attackPlayer(ctx, self, mugDamage(ctx.asc));
       },
     },
     MUGGER_LUNGE: {
       id: "MUGGER_LUNGE",
       intent: "attack",
+      displayDamage: (ctx, self) => previewThievingAttack(ctx, self, lungeDamage(ctx.asc)),
       execute: (ctx, self) => {
         ctx.rng("aiRng").random(2); // dialog roll (consumed for parity, unused)
         stealGold(ctx, self);
-        attackPlayer(ctx, self, ctx.asc >= 2 ? 18 : 16);
+        attackPlayer(ctx, self, lungeDamage(ctx.asc));
       },
     },
     MUGGER_SMOKE_BOMB: {

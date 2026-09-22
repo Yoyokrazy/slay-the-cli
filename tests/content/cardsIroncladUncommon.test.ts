@@ -3,7 +3,9 @@
 // Default monster T_TANK: 200 HP, attacks for 10 every turn.
 
 import { test, expect, describe } from "bun:test";
+import { advance } from "../../src/engine/game";
 import {
+  bundle,
   fight,
   fightWithInHand,
   play,
@@ -442,6 +444,28 @@ describe("SPOT_WEAKNESS", () => {
     let s = fight({ deck: ["SPOT_WEAKNESS", ...strikes(4)], monsters: ["T_GUARD"] });
     s = play(s, "SPOT_WEAKNESS", 0);
     expect(playerPower(s, "STRENGTH")).toBeUndefined();
+  });
+
+  test("uses the selected enemy after an earlier enemy dies", () => {
+    let s = fight({ deck: ["SPOT_WEAKNESS", "BASH", ...strikes(3)], monsters: ["T_FRAIL", "T_TANK"] });
+    s = play(s, "BASH", 0);
+    expect(s.combat!.monsters[0]!.isDead).toBe(true);
+    s = play(s, "SPOT_WEAKNESS", 1);
+    expect(playerPower(s, "STRENGTH")).toBe(3);
+  });
+
+  test("rejects missing, dead, escaped, and nonexistent enemy targets before spending", () => {
+    const s = fight({ deck: ["SPOT_WEAKNESS", ...strikes(4)], monsters: ["T_GUARD", "T_TANK"] });
+    const handIdx = handNames(s).indexOf("SPOT_WEAKNESS");
+    expect(() => advance(s, { cmd: "playCard", handIdx }, bundle)).toThrow("target required");
+    expect(() => advance(s, { cmd: "playCard", handIdx, target: 10 }, bundle)).toThrow("invalid target");
+    for (const state of ["isDead", "isEscaped"] as const) {
+      const invalid = structuredClone(s);
+      invalid.combat!.monsters[0]![state] = true;
+      expect(() => advance(invalid, { cmd: "playCard", handIdx, target: 0 }, bundle)).toThrow("invalid target");
+    }
+    expect(s.combat!.player.energy).toBe(3);
+    expect(handNames(s)).toContain("SPOT_WEAKNESS");
   });
 });
 

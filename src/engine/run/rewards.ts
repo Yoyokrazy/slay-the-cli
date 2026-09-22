@@ -92,14 +92,19 @@ export function cursePool(ctx: EffectCtx): CardId[] {
   return out;
 }
 
-/** Potions available to this class (shared + class pool), insertion order. */
+/** Potions obtainable by this class (shared + class pool), insertion order. */
 export function potionPool(ctx: EffectCtx): PotionId[] {
+  if (!canObtainPotions(ctx.run)) return [];
   const color = classColor(ctx.run.character);
   const out: PotionId[] = [];
   for (const p of ctx.bundle.potions.values()) {
     if (p.class === "shared" || p.class === color) out.push(p.id);
   }
   return out;
+}
+
+export function canObtainPotions(run: RunState): boolean {
+  return !hasRelic(run, "SOZU");
 }
 
 // --- relic pools ----------------------------------------------------------------
@@ -185,9 +190,10 @@ export interface RolledCard {
 export function createCardReward(ctx: EffectCtx, room: RewardRoomKind): RolledCard[] {
   const run = ctx.run;
   const cardRng = ctx.rng("cardRng");
-  let numCards = CARD_REWARD.baseCount;
+  let numCards: number = CARD_REWARD.baseCount;
   if (hasRelic(run, "QUESTION_CARD")) numCards += CARD_REWARD.questionCardModifier;
   if (hasRelic(run, "BUSTED_CROWN")) numCards += CARD_REWARD.bustedCrownModifier;
+  numCards = Math.max(1, numCards);
   // TODO PRISMATIC_SHARD: any-color pool draws (burns an extra cardRng.randomLong per card)
 
   const chance = upgradeChance(run.act, run.ascension);
@@ -216,6 +222,7 @@ export function createCardReward(ctx: EffectCtx, room: RewardRoomKind): RolledCa
 /** returnRandomPotion (Game.cpp:294-326): rarity d100 (<65 common, <90
  *  uncommon, else rare), then uniform pool draws until the rarity matches. */
 export function returnRandomPotion(ctx: EffectCtx): PotionId | null {
+  if (!canObtainPotions(ctx.run)) return null;
   const potionRng = ctx.rng("potionRng");
   const roll = potionRng.randomRange(0, 99);
   const rarity: CardRarityRoll =
@@ -230,9 +237,10 @@ export function returnRandomPotion(ctx: EffectCtx): PotionId | null {
 
 /** addPotionRewards (GameContext.cpp:1755-1775): chance 40 + potionChance
  *  (White Beast Statue: 100; >= 4 rewards already: 0); the d100 roll is always
- *  consumed; pity +/-10 on miss/drop. */
+ *  consumed unless Sozu blocks potion generation first; pity +/-10 on miss/drop. */
 export function rollPotionReward(ctx: EffectCtx, rewardsSoFar: number): PotionId | null {
   const run = ctx.run;
+  if (!canObtainPotions(run)) return null;
   let chance = POTION_DROP.baseChance + run.blizzard.potionChance;
   if (hasRelic(run, "WHITE_BEAST_STATUE")) chance = 100;
   if (rewardsSoFar >= 4) chance = 0;
@@ -310,6 +318,16 @@ function rewardCategoryCount(entries: RewardEntry[]): number {
   return n + groups.size;
 }
 
+function refundedStolenGold(ctx: EffectCtx): number {
+  let total = 0;
+  for (const m of ctx.combat?.monsters ?? []) {
+    if (m.isEscaped) continue;
+    const stolenGold = m.data.stolenGold;
+    if (typeof stolenGold === "number" && Number.isFinite(stolenGold) && stolenGold > 0) total += stolenGold;
+  }
+  return total;
+}
+
 /** Build the post-combat rewards screen. Boss rooms only add potion/card while
  *  act < 3 (GameContext.cpp:1953-1969); boss relic choices are appended by the
  *  run flow (boss treasure room), not here. */
@@ -318,6 +336,8 @@ export function buildCombatRewards(ctx: EffectCtx, room: "monster" | "elite" | "
   const entries: RewardEntry[] = [];
 
   entries.push({ kind: "gold", amount: rollGoldReward(ctx, room), taken: false });
+  const stolenGold = refundedStolenGold(ctx);
+  if (stolenGold > 0) entries.push({ kind: "gold", amount: stolenGold, taken: false });
 
   if (room === "elite") {
     entries.push({ kind: "relic", id: obtainRelicFromPool(run, eliteRelicTier(ctx)), taken: false });
