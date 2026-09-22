@@ -299,7 +299,21 @@ export interface EventOptionView {
 
 export interface EventScreenView {
   summary: string;
+  body: string[];
   options: EventOptionView[];
+}
+
+export function eventScope(state: GameState | null): string | undefined {
+  const room = state?.run.room;
+  return state && room?.kind === "event"
+    ? JSON.stringify([state.seed, state.run.act, state.run.floor, room.eventId])
+    : undefined;
+}
+
+export function eventRevealText(payload: unknown, bundle: ContentBundle): string {
+  const cards = payload && typeof payload === "object" && "cards" in payload && Array.isArray(payload.cards)
+    ? payload.cards : [];
+  return `Revealed: ${cards.map(card => cardName(bundle, typeof card === "string" ? card : "?")).join(", ")}`;
 }
 
 /** Read-only EffectCtx over live state (mirrors tests/fuzz/realRun.test.ts):
@@ -321,13 +335,24 @@ function readonlyEventCtx(state: GameState, bundle: ContentBundle): EffectCtx {
 
 /** Render-ready view of the current event screen, or null for stub rooms
  *  (unknown / exhausted event ids keep the historical "leave" behavior). */
-export function buildEventView(state: GameState, bundle: ContentBundle): EventScreenView | null {
+export function buildEventView(state: GameState, bundle: ContentBundle, revealHistory: readonly string[] = []): EventScreenView | null {
   if (state.run.room?.kind !== "event") return null;
   const ctx = readonlyEventCtx(state, bundle);
   const screen = buildEventScreen(ctx);
   if (!screen) return null;
+  const body: string[] = [];
+  if (state.run.room.eventId === "MATCH_AND_KEEP") {
+    const attempts = state.run.room.data?.attempts;
+    if (typeof attempts === "number" && Number.isInteger(attempts) && attempts >= 0 && attempts <= 5) {
+      body.push(`Attempts left: ${5 - attempts}`);
+    }
+  }
+  // Only emitted reveals, never the event's face-down board or card pool.
+  body.push(...(revealHistory.length > 0 ? revealHistory.slice(-5) :
+    state.eventLog.filter(event => event.event === "eventReveal").map(event => eventRevealText(event.payload, bundle))));
   return {
     summary: screen.summary,
+    body,
     options: screen.options.map((o) => ({ label: o.label, enabled: o.enabled(ctx) })),
   };
 }

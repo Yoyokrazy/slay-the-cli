@@ -23,6 +23,9 @@ export interface SaveIo {
   readSave(): GameState | null;
   writeSave(g: GameState): void;
   deleteSave(): void;
+  /** Checked run persistence for callers that must report partial failures. */
+  writeSaveChecked?(g: GameState): void;
+  deleteSaveChecked?(): void;
   readPrefs(): Prefs;
   writePrefs(p: Prefs): void;
 }
@@ -54,8 +57,19 @@ export function makeSaveIo(dir: string = defaultSaveDir()): SaveIo {
   const ensureDir = (): void => {
     mkdirSync(dir, { recursive: true });
   };
+  const writeSaveChecked = (g: GameState): void => {
+    ensureDir();
+    if (existsSync(savePath)) copyFileSync(savePath, bakPath);
+    writeAtomic(savePath, JSON.stringify(g));
+  };
+  const deleteSaveChecked = (): void => {
+    rmSync(savePath, { force: true });
+    rmSync(bakPath, { force: true });
+  };
   return {
     dir,
+    writeSaveChecked,
+    deleteSaveChecked,
     readSave(): GameState | null {
       const main = validateSavedRun(readJson(savePath));
       if (main) return main;
@@ -63,17 +77,14 @@ export function makeSaveIo(dir: string = defaultSaveDir()): SaveIo {
     },
     writeSave(g: GameState): void {
       try {
-        ensureDir();
-        if (existsSync(savePath)) copyFileSync(savePath, bakPath);
-        writeAtomic(savePath, JSON.stringify(g));
+        writeSaveChecked(g);
       } catch {
         // storage unavailable - the game still plays, just unsaved
       }
     },
     deleteSave(): void {
       try {
-        rmSync(savePath, { force: true });
-        rmSync(bakPath, { force: true });
+        deleteSaveChecked();
       } catch {
         /* ignore */
       }

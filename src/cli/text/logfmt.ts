@@ -5,7 +5,8 @@
 
 import type { GameEvent } from "../../engine/game";
 import type { ContentBundle } from "../../engine/content/defs";
-import { titleCase, potionName, cardName, orbName } from "./runlogic";
+import { needsEnemyTarget } from "../../engine/content/targeting";
+import { titleCase, potionName, cardName, orbName, eventRevealText } from "./runlogic";
 import { toAscii } from "./ascii";
 
 interface ActorRefish {
@@ -132,7 +133,7 @@ export function formatEvent(ev: GameEvent, bundle: ContentBundle, names: readonl
       const name = cardName(bundle, defId, num(p.upgrades) ?? 0);
       // an autoplay rolls a target even for untargeted cards, so only say where
       // it went when the card actually aims (PlayTopCardAction parity)
-      const aims = bundle.cards.get(defId)?.target === "enemy";
+      const aims = needsEnemyTarget(bundle.cards.get(defId)?.target);
       const at = aims && num(p.target) !== null ? ` at ${enemyLabel(names, num(p.target) ?? 0)}` : "";
       const via = str(p.via);
       // an autoplay says who forced it (Havoc, Mayhem, Double Tap...)
@@ -199,8 +200,7 @@ export function formatEvent(ev: GameEvent, bundle: ContentBundle, names: readonl
       out = "A card returns from Stasis";
       break;
     case "eventReveal": {
-      const cards = Array.isArray(p.cards) ? p.cards : [];
-      out = `Revealed: ${cards.map((c) => cardName(bundle, str(c) ?? "?")).join(", ")}`;
+      out = eventRevealText(ev.payload, bundle);
       break;
     }
     default:

@@ -109,7 +109,7 @@ export function renderMenu(screen: MenuView, width: number, height: number, them
   block.push(
     screen.seedEdit !== null
       ? `${ctrlPad}${theme.dim("Seed:")} ${theme.bold(theme.fg(C.bright, `${screen.seedEdit}_`))}   ${theme.dim("typing... [Enter] confirm  [Esc] cancel")}`
-      : ctrlRow(`${theme.dim("Seed:")} ${theme.bold(theme.fg(C.bright, screen.seed))}`, "[s] edit"),
+      : ctrlRow(`${theme.dim("Seed:")} ${theme.bold(theme.fg(C.bright, screen.seed))}`, "[s] edit  [r] random"),
   );
   block.push("");
 
@@ -205,7 +205,7 @@ function renderMenuFallback(screen: MenuView, width: number, height: number, the
   if (screen.seedEdit !== null) {
     out.push(`   Seed: ${theme.bold(`${screen.seedEdit}_`)}   ${theme.dim("typing... [Enter] confirm  [Esc] cancel")}`);
   } else {
-    out.push(`   Seed: ${theme.bold(screen.seed)}   ${theme.dim("[s] edit")}`);
+    out.push(`   Seed: ${theme.bold(screen.seed)}   ${theme.dim("[s] edit  [r] random")}`);
   }
   out.push("");
   const selectedFb = screen.characters.find((ch) => ch.selected) ?? screen.characters[0];

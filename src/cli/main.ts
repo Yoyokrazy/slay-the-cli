@@ -132,13 +132,15 @@ const restore = (): void => {
   }
 };
 process.on("exit", restore);
+const lifecycle = new AbortController();
+let exitCode = 0;
 process.on("SIGINT", () => {
-  restore();
-  process.exit(130);
+  exitCode = 130;
+  lifecycle.abort();
 });
 process.on("SIGTERM", () => {
-  restore();
-  process.exit(143);
+  exitCode = 143;
+  lifecycle.abort();
 });
 process.on("uncaughtException", (e) => {
   // leave the alt screen FIRST so the stack trace lands in the scrollback
@@ -151,5 +153,9 @@ process.on("uncaughtException", (e) => {
 // so this cannot delay startup or scribble on the frame. See io/update.ts.
 const update = parsed.noUpdateCheck === true ? null : checkForUpdates();
 
-await runApp({ term, saves: makeSaveIo(), options: parsed, update });
-process.exit(0);
+await runApp({
+  term, saves: makeSaveIo(), options: parsed, update,
+  controlSocket: process.env.SLAY_CONTROL_SOCKET,
+  signal: lifecycle.signal,
+});
+process.exit(exitCode);

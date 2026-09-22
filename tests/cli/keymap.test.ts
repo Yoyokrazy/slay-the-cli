@@ -7,6 +7,7 @@ import { test, expect, describe } from "bun:test";
 import type { Key } from "../../src/cli/term/keys";
 import { mapKey } from "../../src/cli/input/keymap";
 import { buildView } from "../../src/cli/state/view";
+import { publicUi } from "../../src/cli/state/controlUi";
 import { applyUiAction, initialUiState, type Overlay, type InspectSource, type UiState } from "../../src/cli/state/uiState";
 import { isAppAction, type KeyAction } from "../../src/cli/input/actions";
 import { advance } from "../../src/engine/game";
@@ -202,6 +203,36 @@ describe("list screens", () => {
     if (g.run.room?.kind === "rewards") g.run.room.entries[0]!.taken = true;
     const v2 = buildView(g, f.ui, bundle);
     expect(mapKey(ch("1"), v2)).toEqual({ kind: "ui", act: { type: "toast", text: "taken" } });
+  });
+  test("rewards: Singing Bowl adds a card-group max HP control only while untaken", () => {
+    const f = fxRewards();
+    const without = viewOf(f);
+    if (without.screen.kind !== "rewards") throw new Error("expected rewards");
+    expect(without.screen.rows.some((r) => r.type === "group" && r.items.some((it) => it.name === "Singing Bowl: +2 Max HP"))).toBe(false);
+
+    const g = structuredClone(f.game!);
+    g.run.relics.push({ defId: "SINGING_BOWL", counter: 0 });
+    const room = g.run.room;
+    if (room?.kind !== "rewards") throw new Error("expected rewards");
+    const firstCardIdx = room.entries.findIndex((e) => e.kind === "card");
+    const firstCard = room.entries[firstCardIdx];
+    if (firstCard?.kind !== "card") throw new Error("expected card reward");
+
+    const withBowl = buildView(g, f.ui, bundle);
+    if (withBowl.screen.kind !== "rewards") throw new Error("expected rewards");
+    expect(withBowl.screen.rows.some((r) => r.type === "group" && r.items.some((it) => it.name === "Singing Bowl: +2 Max HP"))).toBe(true);
+    const bowlControl = publicUi(g, f.ui, withBowl).controls.find((c) => c.label === "Singing Bowl: +2 Max HP");
+    if (!bowlControl?.key) throw new Error("expected Singing Bowl control");
+    expect(bowlControl.enabled).toBe(true);
+    expect(bowlControl.id.endsWith(`:reward:${firstCardIdx}:singingBowl:SINGING_BOWL`)).toBe(true);
+    expect(mapKey(ch(bowlControl.key), withBowl)).toEqual({
+      kind: "cmd",
+      cmd: { cmd: "takeSingingBowlReward", group: firstCard.group },
+    });
+
+    const afterCard = advance(g, { cmd: "takeReward", i: firstCardIdx }, bundle);
+    const afterView = buildView(afterCard, f.ui, bundle);
+    expect(publicUi(afterCard, f.ui, afterView).controls.some((c) => c.label === "Singing Bowl: +2 Max HP")).toBe(false);
   });
   test("shop: pagination windows shift what digits map to", () => {
     const f = fxShop();

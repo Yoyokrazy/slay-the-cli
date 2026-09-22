@@ -4,7 +4,7 @@
 // items the View exposes, so the keymap and the renderer can never disagree.
 
 import type { Key } from "../term/keys";
-import type { View, ListItemView } from "../state/view";
+import type { View, ListItemView, ChoiceOverlayView } from "../state/view";
 import { cmd, ui, type KeyAction } from "./actions";
 
 /** '1'..'9' -> 0..8, '0' -> 9 (matching keyFor). */
@@ -63,6 +63,17 @@ function focusedItem(items: ListItemView[], view: View): ListItemView | null {
   return items.find((it) => it.i === view.focusIdx) ?? null;
 }
 
+/** UI focus and toggles use list indices; only a committed pick is translated. */
+function chooseItems(choice: ChoiceOverlayView, selected: number[]): KeyAction | null {
+  const indices: number[] = [];
+  for (const i of selected) {
+    const value = choice.selectionValues[i];
+    if (value === undefined) return null;
+    indices.push(value);
+  }
+  return cmd({ cmd: "choose", indices });
+}
+
 /** [i] opens whatever the view says is under the cursor. buildView resolves
  *  the target (state/view.ts inspectAt), so the keymap never indexes items
  *  itself - that is what used to let [i] and the cursor disagree. Null means
@@ -85,6 +96,7 @@ function globalRunKeys(ch: string, view: View): KeyAction | null {
     case "r":
       return ui({ type: "openOverlay", overlay: { kind: "relics", page: 0 } });
     case "p":
+    case "P":
       return ui({ type: "openOverlay", overlay: { kind: "potions" } });
     case "S":
       return ui({ type: "openOverlay", overlay: { kind: "settings" } });
@@ -161,6 +173,7 @@ function dispatch(key: Key, view: View): KeyAction | null {
       if (ch === "+" || ch === "=") return ui({ type: "menuAsc", delta: 1 });
       if (ch === "-") return ui({ type: "menuAsc", delta: -1 });
       if (ch === "s") return ui({ type: "seedEditStart" });
+      if (ch === "r") return ui({ type: "randomSeed" });
       if (ch === "n") return ui({ type: "newRun" });
       if (ch === "c") {
         const m = view.screen;
@@ -225,13 +238,13 @@ function dispatch(key: Key, view: View): KeyAction | null {
           const h = view.screen.hand[o.index];
           if (!h) return null;
           if (!h.playable) {
-            return ui({ type: "toast", text: h.cost === "-" ? `${h.name} is unplayable` : `Not enough energy for ${h.name}` });
+            return ui({ type: "toast", text: h.cost === "-" ? `${h.name} is unplayable`
+              : Number(h.cost) > view.screen.you.energy ? `Not enough energy for ${h.name}` : `${h.name} cannot be played now` });
           }
           if (h.targeted) {
             const alive = view.screen.enemies.filter((e) => e.gone === null);
             if (alive.length === 1) {
-              const idx = view.screen.enemies.findIndex((e) => e.gone === null);
-              return cmd({ cmd: "playCard", handIdx: o.index, target: idx });
+              return cmd({ cmd: "playCard", handIdx: o.index, target: alive[0]!.combatIndex });
             }
             return ui({ type: "setTargeting", targeting: { kind: "card", handIdx: o.index } });
           }
@@ -272,11 +285,11 @@ function dispatch(key: Key, view: View): KeyAction | null {
         if (o.single) {
           // singles commit via digits or the focus cursor
           const item = focusedItem(o.list.items, view);
-          return item !== null ? cmd({ cmd: "choose", indices: [item.i] }) : null;
+          return item !== null ? chooseItems(o, [item.i]) : null;
         }
         if (o.selected.length < o.min) return ui({ type: "toast", text: `Select at least ${o.min}` });
         if (o.selected.length > o.max) return ui({ type: "toast", text: `Select at most ${o.max}` });
-        return cmd({ cmd: "choose", indices: [...o.selected] });
+        return chooseItems(o, o.selected);
       }
       const focus = focusKeys(key, view);
       if (focus) return focus;
@@ -289,7 +302,7 @@ function dispatch(key: Key, view: View): KeyAction | null {
       if (d !== null) {
         const item = itemAt(o.list.items, d);
         if (!item) return null;
-        if (o.single) return cmd({ cmd: "choose", indices: [item.i] });
+        if (o.single) return chooseItems(o, [item.i]);
         return ui({ type: "toggleChoice", i: item.i, max: o.max });
       }
       return null;
@@ -326,14 +339,14 @@ function dispatch(key: Key, view: View): KeyAction | null {
         const h = s.hand[handIdx];
         if (!h) return null;
         if (!h.playable) {
-          return ui({ type: "toast", text: h.cost === "-" ? `${h.name} is unplayable` : `Not enough energy for ${h.name}` });
+          return ui({ type: "toast", text: h.cost === "-" ? `${h.name} is unplayable`
+            : Number(h.cost) > s.you.energy ? `Not enough energy for ${h.name}` : `${h.name} cannot be played now` });
         }
         if (h.targeted) {
           // exactly one alive enemy: auto-target; otherwise enter targeting
           const alive = s.enemies.filter((e) => e.gone === null);
           if (alive.length === 1) {
-            const idx = s.enemies.findIndex((e) => e.gone === null);
-            return cmd({ cmd: "playCard", handIdx, target: idx });
+            return cmd({ cmd: "playCard", handIdx, target: alive[0]!.combatIndex });
           }
           return ui({ type: "setTargeting", targeting: { kind: "card", handIdx } });
         }

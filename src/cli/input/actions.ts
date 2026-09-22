@@ -30,6 +30,7 @@ export type PureUiAction =
   | { type: "toast"; text: string };
 
 export type AppUiAction =
+  | { type: "randomSeed" }
   | { type: "newRun" }
   | { type: "continueRun" }
   | { type: "backToMenu" }
@@ -42,6 +43,7 @@ export type KeyAction = { kind: "cmd"; cmd: Command } | { kind: "ui"; act: UiAct
 
 export function isAppAction(act: UiAction): act is AppUiAction {
   return (
+    act.type === "randomSeed" ||
     act.type === "newRun" ||
     act.type === "continueRun" ||
     act.type === "backToMenu" ||

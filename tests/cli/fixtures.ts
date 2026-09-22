@@ -6,6 +6,7 @@
 import { createRun, advance, type GameState, type Command } from "../../src/engine/game";
 import { buildBaseContentBundle } from "../../src/content";
 import type { ContentBundle } from "../../src/engine/content/defs";
+import { needsEnemyTarget } from "../../src/engine/content/targeting";
 import type { ActMap, MapNode } from "../../src/engine/run/runState";
 import { legalCommands } from "../fuzz/helpers";
 import { legalMapPicks, buildEventView } from "../../src/cli/text/runlogic";
@@ -210,7 +211,7 @@ export function fxCombatTargeting(): Fixture {
   const c = f.game!.combat!;
   const handIdx = c.player.piles.hand.findIndex((iid) => {
     const card = c.cards[iid]!;
-    return bundle.cards.get(card.defId)?.target === "enemy";
+    return needsEnemyTarget(bundle.cards.get(card.defId)?.target);
   });
   if (handIdx < 0) throw new Error("fxCombatTargeting: no targeted card in hand");
   return { game: f.game, ui: { ...f.ui, targeting: { kind: "card", handIdx } } };
@@ -317,7 +318,7 @@ export function fxCombatCrowdTargeting(): Fixture {
   const c = f.game!.combat!;
   const handIdx = c.player.piles.hand.findIndex((iid) => {
     const card = c.cards[iid]!;
-    return bundle.cards.get(card.defId)?.target === "enemy";
+    return needsEnemyTarget(bundle.cards.get(card.defId)?.target);
   });
   if (handIdx < 0) throw new Error("fxCombatCrowdTargeting: no targeted card in hand");
   return { game: f.game, ui: { ...f.ui, targeting: { kind: "card", handIdx } } };

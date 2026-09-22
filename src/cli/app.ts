@@ -6,23 +6,28 @@ import { createRun, advance, type GameState, type Command, type GameEvent } from
 import { buildBaseContentBundle } from "../content";
 import type { ContentBundle } from "../engine/content/defs";
 import type { TerminalPort } from "./term/terminal";
-import { parseKeys } from "./term/keys";
+import { parseKeys, type Key } from "./term/keys";
 import { SYNC_START, SYNC_END, CURSOR_HOME, CLEAR_TO_EOL } from "./term/ansi";
 import { renderFrame } from "./render/frame";
 import { THEME_256, THEME_PLAIN, type Theme } from "./render/theme";
 import { buildView } from "./state/view";
 import { initialUiState, resetRunUi, pushLog, pushLogLines, applyUiAction, type UiState } from "./state/uiState";
 import { mapKey } from "./input/keymap";
-import { isAppAction, type AppUiAction } from "./input/actions";
+import { isAppAction, type AppUiAction, type KeyAction } from "./input/actions";
+import { LiveController, startControlServer, type ControlPort, type ControlServer, type DispatchResult } from "./io/control";
+import { controlSafeView, publicGameState } from "./state/controlState";
+import { publicUi, resolveControl } from "./state/controlUi";
 import {
   bumpSeed,
   cardName,
   chestLootSummary,
   clampAscension,
+  eventScope,
   isCharacterId,
   type UICharacterId,
 } from "./text/runlogic";
 import type { SaveIo } from "./io/saves";
+import { randomSeed } from "./io/seed";
 
 export interface AppOptions {
   seed?: string;
@@ -38,6 +43,10 @@ export interface AppDeps {
   bundle?: ContentBundle;
   /** startup update check result (main.ts does the io; see io/update.ts) */
   update?: { behind: number } | null;
+  /** Opt-in live control. No save reads or terminal injection by the transport. */
+  controlSocket?: string;
+  onControlReady?: (port: ControlPort) => void;
+  signal?: AbortSignal;
 }
 
 export interface AppResult {
@@ -99,7 +108,7 @@ export function runApp(deps: AppDeps): Promise<AppResult> {
 
   const absorbEvents = (events: GameEvent[], was: GameState | null = null): void => {
     const live = rosterOf(game);
-    ui = pushLog(ui, events, bundle, live.length > 0 ? live : rosterOf(was));
+    ui = pushLog(ui, events, bundle, live.length > 0 ? live : rosterOf(was), eventScope(game));
     // a card that lands in the deck with no screen of its own (Neow's random
     // rare, a Neow curse) is otherwise invisible: say so on the hint line
     const gained: string[] = [];
@@ -120,13 +129,31 @@ export function runApp(deps: AppDeps): Promise<AppResult> {
     term.write(frame);
   };
 
-  const doAdvance = (cmd: Command): void => {
-    if (!game) return;
+  const failure = (error: unknown): DispatchResult => {
+    const msg = errMsg(error);
+    ui = { ...ui, toast: /invariant/i.test(msg) ? "That can't be used right now" : msg };
+    return { ok: false, error: msg };
+  };
+
+  const persistRun = (state: GameState): void => {
+    if (saves.writeSaveChecked) saves.writeSaveChecked(state);
+    else saves.writeSave(state);
+  };
+  const deleteRunSave = (): void => {
+    if (saves.deleteSaveChecked) saves.deleteSaveChecked();
+    else saves.deleteSave();
+  };
+
+  const doAdvance = (cmd: Command): DispatchResult => {
+    if (!game) return failure("No live game");
     const prev = game;
     ui = { ...ui, targeting: null };
+    let applied = false;
+    let saving = false;
     try {
       const next = advance(game, cmd, bundle);
       game = next;
+      applied = true;
       // overlays are the means of picking a command - a successful advance
       // closes them (the web UI closed its menus before advancing too)
       ui = { ...ui, choiceSel: [], choicePage: 0, overlays: [] };
@@ -139,37 +166,38 @@ export function runApp(deps: AppDeps): Promise<AppResult> {
       if (prev.run.room?.kind !== next.run.room?.kind) {
         ui = { ...ui, page: 0, mapScroll: 0, focus: null };
       }
+      saving = true;
       if (next.run.room?.kind === "gameOver") {
-        saves.deleteSave();
+        deleteRunSave();
       } else {
-        saves.writeSave(next);
+        persistRun(next);
       }
+      return { ok: true, outcome: "applied" };
     } catch (e) {
-      const msg = errMsg(e);
-      ui = { ...ui, toast: /invariant/i.test(msg) ? "That can't be used right now" : msg };
+      return { ...failure(e), outcome: applied ? saving ? "applied-save-failed" : "applied" : "rejected" };
     }
   };
 
-  const newRun = (): void => {
+  const newRun = (): DispatchResult => {
     savePrefs();
     let created: GameState;
     try {
       created = createRun({ seed: ui.seed, bundle, character: ui.character, ascension: ui.ascension });
     } catch (e) {
-      ui = { ...ui, toast: errMsg(e) };
-      return;
+      return failure(e);
     }
     game = created;
     ui = resetRunUi({ ...ui, screen: "run", log: [] });
     absorbEvents(created.eventLog);
-    saves.writeSave(created);
+    try { persistRun(created); }
+    catch (error) { return { ...failure(error), outcome: "applied-save-failed" }; }
+    return { ok: true, outcome: "applied" };
   };
 
-  const continueRun = (): void => {
+  const continueRun = (): DispatchResult => {
     const restored = saves.readSave();
     if (!restored) {
-      ui = { ...ui, toast: "No valid saved run found" };
-      return;
+      return failure("No valid saved run found");
     }
     const prevGame = game;
     const prevUi = ui;
@@ -183,14 +211,21 @@ export function runApp(deps: AppDeps): Promise<AppResult> {
     });
     ui = pushLogLines(ui, ["(restored saved run)"]);
     try {
+      const scope = eventScope(restored);
+      if (scope && !ui.log.some(line => line.eventScope === scope)) {
+        ui = pushLog(ui, restored.eventLog.filter(event => event.event === "eventReveal"), bundle, [], scope);
+      }
       // stale/incompatible saves from an older engine build blow up on first
       // render - probe once, discard and recover to the menu if so
       renderFrame(buildView(game, ui, bundle), { cols: 100, rows: 30 }, THEME_PLAIN);
     } catch {
-      saves.deleteSave();
       game = prevGame;
       ui = { ...prevUi, screen: "menu", menuSave: null, toast: "Saved run was from an older version - it was discarded" };
+      try { deleteRunSave(); }
+      catch (error) { return failure(`Saved run is incompatible; could not discard it: ${errMsg(error)}`); }
+      return { ok: false, error: ui.toast! };
     }
+    return { ok: true, outcome: "applied" };
   };
 
   const backToMenu = (): void => {
@@ -198,79 +233,139 @@ export function runApp(deps: AppDeps): Promise<AppResult> {
     refreshMenuSave();
   };
 
-  const rerun = (): void => {
-    if (!game) return;
+  const rerun = (): DispatchResult => {
+    if (!game) return failure("No live game");
     ui = {
       ...ui,
       seed: bumpSeed(game.seed),
       character: isCharacterId(game.run.character) ? game.run.character : ui.character,
       ascension: clampAscension(game.run.ascension),
     };
-    newRun();
+    return newRun();
   };
 
-  return new Promise<AppResult>((resolve) => {
+  return new Promise<AppResult>((resolve, reject) => {
     let done = false;
+    let server: ControlServer | undefined;
+    let control: LiveController | undefined;
     const quit = (): void => {
       if (done) return;
       done = true;
+      deps.signal?.removeEventListener("abort", quit);
       term.restore();
-      resolve({ game, ui });
+      control?.close();
+      if (server) void server.close().then(() => resolve({ game, ui }), reject);
+      else resolve({ game, ui });
     };
 
-    const handleAppAction = (act: AppUiAction): void => {
+    const handleAppAction = (act: AppUiAction): DispatchResult => {
       switch (act.type) {
+        case "randomSeed":
+          ui = { ...ui, seed: randomSeed() };
+          return { ok: true, outcome: "ui-only" };
         case "newRun":
-          newRun();
-          break;
+          return newRun();
         case "continueRun":
-          continueRun();
-          break;
+          return continueRun();
         case "backToMenu":
           backToMenu();
-          break;
+          return { ok: true, outcome: "ui-only" };
         case "rerun":
-          rerun();
-          break;
+          return rerun();
         case "quit":
           quit();
-          break;
+          return { ok: true, outcome: "ui-only" };
       }
     };
 
-    term.setup();
-    paint();
-
-    term.onResize(() => {
-      if (!done) paint();
-    });
-
-    // NOTE: a scripted fakeTerminal delivers its keys synchronously inside
-    // this registration, so everything the handler needs exists already.
-    term.onData((chunk) => {
-      if (done) return;
-      for (const key of parseKeys(chunk)) {
-        if (done) break;
-        ui = { ...ui, toast: null }; // toasts live until the next keypress
-        if (key.kind === "ctrlC") {
-          quit(); // save is per-advance, so Ctrl+C is always a safe exit
-          break;
-        }
-        const view = buildView(game, ui, bundle);
-        const action = mapKey(key, view);
-        if (!action) continue;
+    const dispatch = (action: KeyAction): DispatchResult => {
+      ui = { ...ui, toast: null };
+      try {
         if (action.kind === "cmd") {
-          doAdvance(action.cmd);
+          return doAdvance(action.cmd);
         } else if (isAppAction(action.act)) {
-          handleAppAction(action.act);
+          return handleAppAction(action.act);
         } else {
           ui = applyUiAction(ui, action.act);
-          // the reducer stays pure, so the one setting-flipping action gets
-          // its write here rather than inside it
           if (action.act.type === "toggleVimKeys") savePrefs();
+          if (ui.toast) return { ok: false, error: ui.toast };
+          return { ok: true, outcome: "ui-only" };
         }
+      } catch (error) { return failure(error); }
+    };
+
+    const finishInput = (result: DispatchResult): DispatchResult => {
+      try { if (!done) paint(); }
+      catch (error) {
+        const paintError = errMsg(error);
+        failure(error);
+        result = { ...result, ok: false, paintError, error: result.error ? `${result.error}; paint: ${paintError}` : paintError };
       }
-      if (!done) paint();
-    });
+      // Observe every input, not merely reads: away-and-back manual navigation
+      // must still invalidate a revision a remote caller already holds.
+      control?.snapshot();
+      return result;
+    };
+
+    const handleKey = (key: Key): void => {
+      ui = { ...ui, toast: null };
+      if (key.kind === "ctrlC") {
+        quit();
+        return;
+      }
+      const action = mapKey(key, buildView(game, ui, bundle));
+      finishInput(action ? dispatch(action) : { ok: false, error: "No action for this key" });
+    };
+
+    if (deps.controlSocket !== undefined || deps.onControlReady) {
+      control = new LiveController(() => {
+        const view = controlSafeView(buildView(game, ui, bundle));
+        return {
+          state: publicGameState(game, bundle, view),
+          ui: { ...publicUi(game, ui, view), running: !done },
+          screenText: renderFrame(view, { cols: term.cols() || 80, rows: term.rows() || 24 }, THEME_PLAIN).join("\n"),
+        };
+      }, action => {
+        if (done) return { ok: false, error: "CLOSED: the app has stopped" };
+        try {
+          const resolved = resolveControl(action, game, ui, controlSafeView(buildView(game, ui, bundle)), bundle);
+          return { ...finishInput(dispatch(resolved.action)), identity: resolved.identity, label: resolved.label };
+        } catch (error) {
+          return finishInput(failure(error));
+        }
+      });
+    }
+
+    const start = (): void => {
+      if (deps.signal?.aborted) { quit(); return; }
+      deps.signal?.addEventListener("abort", quit, { once: true });
+      term.setup();
+      paint();
+      control?.snapshot();
+      term.onResize(() => {
+        if (!done) { paint(); control?.snapshot(); }
+      });
+      // fakeTerminal may deliver a complete script synchronously here.
+      term.onData(chunk => {
+        for (const key of parseKeys(chunk)) {
+          if (done) break;
+          handleKey(key);
+        }
+      });
+      if (control) deps.onControlReady?.(control);
+    };
+    if (deps.controlSocket !== undefined && control) {
+      void startControlServer(deps.controlSocket, control).then(bound => {
+        server = bound;
+        try { start(); }
+        catch (error) { term.restore(); void bound.close().finally(() => reject(error)); }
+      }, reject);
+    } else {
+      try { start(); }
+      catch (error) {
+        term.restore();
+        reject(error);
+      }
+    }
   });
 }

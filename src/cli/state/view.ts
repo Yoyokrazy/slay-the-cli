@@ -4,13 +4,14 @@
 // keeps them pure, snapshot-testable, and ignorant of game internals.
 
 import type { GameState, Command } from "../../engine/game";
-import type { RoomState, RewardEntry } from "../../engine/run/runState";
+import type { RoomState, RewardEntry, ShopState } from "../../engine/run/runState";
 import type { CardInstance, CombatState } from "../../engine/combat/combatState";
 import type { CardDef, ContentBundle } from "../../engine/content/defs";
+import { needsEnemyTarget } from "../../engine/content/targeting";
 import type { PendingChoice } from "../../engine/core/actions";
 import { getIntents, type IntentInfo, type IntentPower } from "../../engine/combat/intents";
 import { peekRelicFromPool } from "../../engine/run/rewards";
-import { getCardPreviews, previewCardAt, type CardPreview } from "../../engine/combat/preview";
+import { getCardCost, getCardPlayability, getCardPreviews, previewCardAt, type CardPreview } from "../../engine/combat/preview";
 import {
   titleCase,
   isCharacterId,
@@ -40,6 +41,7 @@ import {
   CHARACTER_COLORS,
   ascensionLabel,
   buildEventView,
+  eventScope,
   playerFocus,
   orbDisplayValue,
   orbName,
@@ -195,6 +197,8 @@ export interface IntentView {
 
 export interface EnemyPanelView {
   key: string | null; // targeting number for alive enemies
+  /** Original combat.monsters slot; panels omit GAP entries. */
+  combatIndex: number;
   /** monster id, for the ASCII portrait and its tint */
   id: string;
   name: string;
@@ -350,18 +354,25 @@ export interface GameOverView {
 
 export type ScreenView = MenuView | MapView | CombatView | SimpleListScreen | ShopView | RewardsView | GameOverView;
 
+export interface ChoiceOverlayView {
+  kind: "choice";
+  title: string;
+  constraint: string;
+  list: ListView;
+  /** Engine choose values indexed by full-list display index, across all pages.
+   *  Event/Neow/rest deck picks use deck indices; combat, options and relic
+   *  pickup continuations use candidate positions instead. */
+  selectionValues: number[];
+  /** Full-list display indices, like UiState.choiceSel and ListItemView.i. */
+  selected: number[];
+  min: number;
+  max: number;
+  canCancel: boolean;
+  single: boolean;
+}
+
 export type OverlayView =
-  | {
-      kind: "choice";
-      title: string;
-      constraint: string;
-      list: ListView;
-      selected: number[];
-      min: number;
-      max: number;
-      canCancel: boolean;
-      single: boolean;
-    }
+  | ChoiceOverlayView
   | { kind: "list"; id: "deck" | "relics" | "pile" | "potions" | "settings"; title: string; list: ListView }
   | { kind: "potionMenu"; slot: number; name: string; targeted: boolean; text: string | null; blocked: string | null }
   | {
@@ -481,10 +492,10 @@ function makeList(all: RawItem[], page: number, focusI: number | null = null): L
 }
 
 /** ASCII printed cost for a live card instance. */
-function instCostLabel(card: CardInstance): string {
-  if (card.cost === -1) return "X";
-  if (card.cost === -2) return "-";
-  return String(card.costForTurn);
+function instCostLabel(cost: number): string {
+  if (cost === -1) return "X";
+  if (cost === -2) return "-";
+  return String(cost);
 }
 
 function masterCostLabel(cost: number): string {
@@ -564,6 +575,7 @@ function intentParts(bundle: ContentBundle, info: IntentInfo): IntentPartView[] 
     parts.push({ text: `+${c.n} ${name}`, kind: "cards" });
   }
   if (info.hpLoss > 0) parts.push({ text: `-${info.hpLoss} HP`, kind: "debuff" });
+  if (info.goldLoss > 0) parts.push({ text: `steals up to ${info.goldLoss}G`, kind: "debuff" });
   if (info.allyBlock > 0) parts.push({ text: `ally [+${info.allyBlock}]`, kind: "block" });
   if (info.heal > 0) parts.push({ text: `heals ${info.heal}`, kind: "buff" });
   if (info.summons.length > 0) {
@@ -685,14 +697,6 @@ function powerChips(bundle: ContentBundle, powers: { id: string; amount: number 
 /** Alphabetic 3-letter tag for the relic strip. */
 function relicAbbrev(name: string): string {
   return name.replace(/[^A-Za-z]/g, "").slice(0, 3);
-}
-
-/** Mirror of the engine's playability gate (web UI's isPlayable). */
-function isPlayable(card: CardInstance, energy: number): boolean {
-  if (card.cost === -2) return false;
-  if (card.cost === -1) return true;
-  if (card.freeToPlayOnce) return true;
-  return energy >= card.costForTurn;
 }
 
 function firstRulesLine(defId: string, upgrades: number): string {
@@ -853,6 +857,7 @@ function buildCombat(g: GameState, ui: UiState, bundle: ContentBundle, screenFoc
     const info = blindIntents || gone ? null : (intents[idx] ?? null);
     return [{
       key: gone ? null : (keyFor(targetNo++) ?? null),
+      combatIndex: idx,
       id: m.id,
       name: toAscii(bundle.monsters.get(m.id)?.name ?? titleCase(m.id)),
       hp: m.hp,
@@ -894,14 +899,15 @@ function buildCombat(g: GameState, ui: UiState, bundle: ContentBundle, screenFoc
   const hand = c.player.piles.hand.map((iid, i) => {
     const card = c.cards[iid]!;
     const def = bundle.cards.get(card.defId);
+    const { cost, playable } = getCardPlayability(g, bundle, card);
     return {
       key: keyFor(i),
       name: toAscii((def?.name ?? titleCase(card.defId)) + (card.upgrades > 0 ? "+" : "")),
-      cost: instCostLabel(card),
+      cost: instCostLabel(cost),
       type: def?.type ?? "?",
       rarity: def?.rarity ?? "?",
-      targeted: def?.target === "enemy",
-      playable: isPlayable(card, p.energy),
+      targeted: needsEnemyTarget(def?.target),
+      playable,
       rules: cardRulesText(card.defId, card.upgrades)
         .split("\n")
         .filter((l) => l.trim().length > 0)
@@ -918,8 +924,8 @@ function buildCombat(g: GameState, ui: UiState, bundle: ContentBundle, screenFoc
   let focusPotionSlot: number | null = null;
   if (screenFocus !== null) {
     const aliveIdx: number[] = [];
-    c.monsters.forEach((m, idx) => {
-      if (!m.isDead && !m.isEscaped) aliveIdx.push(idx);
+    enemies.forEach((enemy, idx) => {
+      if (enemy.gone === null) aliveIdx.push(idx);
     });
     const potionSlots = g.run.potions.map((id, slot) => ({ id, slot })).filter((p) => p.id !== null);
     let k = screenFocus;
@@ -979,7 +985,15 @@ const REWARD_ICONS: Record<string, string> = {
   emeraldKey: "(K)",
 };
 
+const SINGING_BOWL_REWARD_LABEL = "Singing Bowl: +2 Max HP";
+const SINGING_BOWL_REWARD_RULE = "Skip this card reward to raise Max HP by 2.";
+
+function hasSingingBowl(g: GameState): boolean {
+  return g.run.relics.some((r) => r.defId === "SINGING_BOWL");
+}
+
 function buildRewards(g: GameState, room: Extract<RoomState, { kind: "rewards" }>, page: number, focusI: number | null, bundle: ContentBundle): RewardsView {
+  const rowsSource = rewardRows(room.entries);
   const items: RawItem[] = room.entries.map((e, i) => {
     const blocked = rewardBlocked(e, g.run);
     const isCard = e.kind === "card";
@@ -993,12 +1007,28 @@ function buildRewards(g: GameState, room: Extract<RoomState, { kind: "rewards" }
       action: cmd({ cmd: "takeReward", i }),
     };
   });
+  const singingBowlItems = new Map<number, number>();
+  if (hasSingingBowl(g)) {
+    for (const row of rowsSource) {
+      if (row.type !== "group" || row.kind !== "card") continue;
+      const first = row.items[0]?.entry;
+      if (first?.kind !== "card" || row.items.some(({ entry }) => entry.taken)) continue;
+      const group = first.group;
+      singingBowlItems.set(group, items.length);
+      items.push({
+        label: SINGING_BOWL_REWARD_LABEL,
+        sub: SINGING_BOWL_REWARD_RULE,
+        action: cmd({ cmd: "takeSingingBowlReward", group }),
+      });
+    }
+  }
+  const continueI = items.length;
   items.push({
     label: room.source === "boss" ? "Continue to the next act" : "Continue",
     action: cmd({ cmd: "skipRewards" }),
   });
 
-  const rows: RewardRowView[] = rewardRows(room.entries).map((row) => {
+  const rows: RewardRowView[] = rowsSource.map((row) => {
     if (row.type === "single") {
       const e = row.entry;
       const blocked = rewardBlocked(e, g.run);
@@ -1017,32 +1047,47 @@ function buildRewards(g: GameState, room: Extract<RoomState, { kind: "rewards" }
         note: e.taken ? "taken" : blocked !== null ? toAscii(blocked) : rewardAdvisory(e, g.run),
       };
     }
+    const first = row.items[0]?.entry;
+    const singingBowlI = row.kind === "card" && first?.kind === "card" ? singingBowlItems.get(first.group) : undefined;
     return {
       type: "group" as const,
       kind: row.kind,
       title: row.kind === "card" ? "Choose one card:" : "Choose one boss relic:",
-      items: row.items.map(({ idx, entry }) => {
-        const blocked = rewardBlocked(entry, g.run);
-        const up = entry.kind === "card" && entry.upgraded ? 1 : 0;
-        const def = entry.kind === "card" ? bundle.cards.get(entry.id) : undefined;
-        return {
-          i: idx,
-          name: toAscii(rewardLabel(entry, bundle)),
-          cost: entry.kind === "card" && def ? masterCostLabel(masterCardCost(def, up)) : "",
-          cardType: entry.kind === "card" ? (def?.type ?? "?") : "relic",
-          rules:
-            entry.kind === "card"
-              ? cardRulesText(entry.id, up)
-                  .split("\n")
-                  .filter((l) => l.trim().length > 0)
-                  .map(toAscii)
-              : entry.kind === "bossRelic"
-                ? [relicText(entry.id)].filter((l) => l.length > 0)
-                : [],
-          enabled: blocked === null,
-          note: entry.taken ? "taken" : blocked !== null ? toAscii(blocked) : null,
-        };
-      }),
+      items: [
+        ...row.items.map(({ idx, entry }) => {
+          const blocked = rewardBlocked(entry, g.run);
+          const up = entry.kind === "card" && entry.upgraded ? 1 : 0;
+          const def = entry.kind === "card" ? bundle.cards.get(entry.id) : undefined;
+          return {
+            i: idx,
+            name: toAscii(rewardLabel(entry, bundle)),
+            cost: entry.kind === "card" && def ? masterCostLabel(masterCardCost(def, up)) : "",
+            cardType: entry.kind === "card" ? (def?.type ?? "?") : "relic",
+            rules:
+              entry.kind === "card"
+                ? cardRulesText(entry.id, up)
+                    .split("\n")
+                    .filter((l) => l.trim().length > 0)
+                    .map(toAscii)
+                : entry.kind === "bossRelic"
+                  ? [relicText(entry.id)].filter((l) => l.length > 0)
+                  : [],
+            enabled: blocked === null,
+            note: entry.taken ? "taken" : blocked !== null ? toAscii(blocked) : null,
+          };
+        }),
+        ...(singingBowlI !== undefined
+          ? [{
+              i: singingBowlI,
+              name: SINGING_BOWL_REWARD_LABEL,
+              cost: "",
+              cardType: "power",
+              rules: [SINGING_BOWL_REWARD_RULE],
+              enabled: true,
+              note: null,
+            }]
+          : []),
+      ],
     };
   });
 
@@ -1051,9 +1096,17 @@ function buildRewards(g: GameState, room: Extract<RoomState, { kind: "rewards" }
     // the game says enemy, not monster
     title: `SPOILS OF BATTLE - ${room.source === "monster" ? "enemy" : room.source}`,
     rows,
-    continueI: room.entries.length,
+    continueI,
     list: makeList(items, page, focusI),
   };
+}
+
+function shopBuyBlocked(slot: { sold: boolean; price: number }, gold: number): string | null {
+  return slot.sold ? "sold" : gold < slot.price ? `need ${slot.price}G` : null;
+}
+
+function shopRemovalBlocked(shop: ShopState, gold: number): string | null {
+  return shop.removalUsed ? "used" : gold < shop.removalCost ? `need ${shop.removalCost}G` : null;
 }
 
 function buildShop(g: GameState, room: Extract<RoomState, { kind: "shop" }>, page: number, focusI: number | null, bundle: ContentBundle): ShopView {
@@ -1065,11 +1118,12 @@ function buildShop(g: GameState, room: Extract<RoomState, { kind: "shop" }>, pag
   const potions: ShopRowView[] = [];
   shop.cards.forEach((slot, idx) => {
     const def = bundle.cards.get(slot.id);
+    const blocked = shopBuyBlocked(slot, gold);
     items.push({
       label: `Card   ${def?.name ?? titleCase(slot.id)} (${def ? masterCostLabel(def.cost) : "?"})  ${slot.price}G`,
       sub: null,
-      enabled: !slot.sold,
-      note: slot.sold ? "sold" : gold < slot.price ? `need ${slot.price}G` : null,
+      enabled: blocked === null,
+      note: blocked,
       action: cmd({ cmd: "shopBuy", kind: "card", idx }),
     });
     cards.push({
@@ -1087,10 +1141,11 @@ function buildShop(g: GameState, room: Extract<RoomState, { kind: "shop" }>, pag
     });
   });
   shop.relics.forEach((slot, idx) => {
+    const blocked = shopBuyBlocked(slot, gold);
     items.push({
       label: `Relic  ${relicName(bundle, slot.id)} (${slot.tier})  ${slot.price}G`,
-      enabled: !slot.sold,
-      note: slot.sold ? "sold" : gold < slot.price ? `need ${slot.price}G` : null,
+      enabled: blocked === null,
+      note: blocked,
       action: cmd({ cmd: "shopBuy", kind: "relic", idx }),
     });
     relics.push({
@@ -1104,10 +1159,11 @@ function buildShop(g: GameState, room: Extract<RoomState, { kind: "shop" }>, pag
     });
   });
   shop.potions.forEach((slot, idx) => {
+    const blocked = shopBuyBlocked(slot, gold);
     items.push({
       label: `Potion ${potionName(bundle, slot.id)}  ${slot.price}G`,
-      enabled: !slot.sold,
-      note: slot.sold ? "sold" : gold < slot.price ? `need ${slot.price}G` : null,
+      enabled: blocked === null,
+      note: blocked,
       action: cmd({ cmd: "shopBuy", kind: "potion", idx }),
     });
     potions.push({
@@ -1120,14 +1176,12 @@ function buildShop(g: GameState, room: Extract<RoomState, { kind: "shop" }>, pag
       text: potionText(slot.id, sacredBark(g)),
     });
   });
+  const removalBlocked = shopRemovalBlocked(shop, gold);
   items.push({
     label: `Remove a card from your deck  ${shop.removalCost}G`,
-    enabled: !shop.removalUsed,
-    note: shop.removalUsed ? "used" : gold < shop.removalCost ? `need ${shop.removalCost}G` : null,
-    action:
-      gold >= shop.removalCost
-        ? uiAct({ type: "openOverlay", overlay: { kind: "deck", mode: "remove", page: 0 } })
-        : uiAct({ type: "toast", text: "Not enough gold for a removal" }),
+    enabled: removalBlocked === null,
+    note: removalBlocked,
+    action: uiAct({ type: "openOverlay", overlay: { kind: "deck", mode: "remove", page: 0 } }),
   });
   const removal = {
     i: items.length - 1,
@@ -1248,9 +1302,10 @@ function buildTreasure(
   return { kind: "treasure", title: chestTitle(chest.size).toUpperCase(), intro: intro.map(toAscii), list: makeList(items, page, focusI) };
 }
 
-function buildEvent(g: GameState, room: Extract<RoomState, { kind: "event" }>, page: number, focusI: number | null, bundle: ContentBundle): SimpleListScreen {
+function buildEvent(g: GameState, room: Extract<RoomState, { kind: "event" }>, ui: UiState, page: number, focusI: number | null, bundle: ContentBundle): SimpleListScreen {
   const title = eventTitle(bundle, room.eventId).toUpperCase();
-  const view = buildEventView(g, bundle);
+  const scope = eventScope(g);
+  const view = buildEventView(g, bundle, ui.log.filter(line => line.eventScope === scope).map(line => line.text));
   if (!view) {
     return {
       kind: "event",
@@ -1268,7 +1323,7 @@ function buildEvent(g: GameState, room: Extract<RoomState, { kind: "event" }>, p
   return {
     kind: "event",
     title: toAscii(title),
-    intro: [toAscii(view.summary)],
+    intro: [view.summary, ...view.body].map(toAscii),
     list: makeList(items, page, focusI),
   };
 }
@@ -1295,7 +1350,7 @@ function buildGameOver(g: GameState, room: Extract<RoomState, { kind: "gameOver"
 
 // --- overlays -----------------------------------------------------------------------
 
-function buildChoiceOverlay(g: GameState, pending: PendingChoice, ui: UiState, focusI: number | null, bundle: ContentBundle): OverlayView {
+function buildChoiceOverlay(g: GameState, pending: PendingChoice, ui: UiState, focusI: number | null, bundle: ContentBundle): ChoiceOverlayView {
   const req = pending.request;
   const min = req.kind === "cards" ? req.min : req.kind === "option" ? 1 : 0;
   const max = req.kind === "cards" ? req.max : req.kind === "option" ? 1 : req.iids.length;
@@ -1308,6 +1363,13 @@ function buildChoiceOverlay(g: GameState, pending: PendingChoice, ui: UiState, f
         : "Choose cards to discard";
   const constraint = req.kind === "scry" ? "any number" : min === max ? `exactly ${min}` : `${min}-${max}`;
   const single = req.kind === "option" || (min === 1 && max === 1);
+  // These run continuations accept deck indices directly. Relic pickups also
+  // display deck cards, but translate candidate positions in their own resume.
+  const usesDeckIndices = !g.combat && req.kind === "cards" &&
+    (pending.resume === "__eventChoice" || pending.resume === "__runDeckChoice" || pending.resume === "__restToke");
+  const selectionValues = req.kind === "option"
+    ? req.options.map((_, i) => i)
+    : req.iids.map((iid, i) => usesDeckIndices ? iid : i);
 
   let raw: RawItem[];
   if (req.kind === "option") {
@@ -1326,7 +1388,7 @@ function buildChoiceOverlay(g: GameState, pending: PendingChoice, ui: UiState, f
           : `deck #${iid}`;
       } else {
         const card = g.combat?.cards[iid];
-        label = card ? `${cardName(bundle, card.defId, card.upgrades)} (${instCostLabel(card)})` : `card #${iid}`;
+        label = card ? `${cardName(bundle, card.defId, card.upgrades)} (${instCostLabel(getCardCost(g, bundle, card))})` : `card #${iid}`;
       }
       if (req.kind === "scry" && i === 0) label += "  (top of draw)";
       return { label };
@@ -1337,6 +1399,7 @@ function buildChoiceOverlay(g: GameState, pending: PendingChoice, ui: UiState, f
     title: toAscii(title),
     constraint,
     list: makeList(raw, ui.choicePage, focusI),
+    selectionValues,
     selected: [...ui.choiceSel],
     min,
     max,
@@ -1418,7 +1481,7 @@ function inspectables(g: GameState, source: InspectSource, bundle: ContentBundle
       if (!c) return [];
       return c.player.piles.hand.flatMap((iid, at) => {
         const card = c.cards[iid];
-        return card ? [{ kind: "card" as const, at, enter: null, defId: card.defId, upgrades: card.upgrades, cost: instCostLabel(card) }] : [];
+        return card ? [{ kind: "card" as const, at, enter: null, defId: card.defId, upgrades: card.upgrades, cost: instCostLabel(getCardCost(g, bundle, card)) }] : [];
       });
     }
     case "deck":
@@ -1430,7 +1493,7 @@ function inspectables(g: GameState, source: InspectSource, bundle: ContentBundle
         enter: null,
         defId: card.defId,
         upgrades: card.upgrades,
-        cost: instCostLabel(card),
+        cost: instCostLabel(getCardCost(g, bundle, card)),
       }));
     case "relics":
       return g.run.relics.map((r, at) => ({ kind: "relic" as const, at, enter: null, defId: r.defId }));
@@ -1469,16 +1532,16 @@ function inspectables(g: GameState, source: InspectSource, bundle: ContentBundle
       const shop = room.shop;
       // the same order buildShop pushes them, so `at` IS the list index
       const out: InspectRef[] = [];
-      const buy = (kind: "card" | "relic" | "potion", idx: number, sold: boolean): KeyAction =>
-        enterOr(sold ? "sold" : null, cmd({ cmd: "shopBuy", kind, idx }));
+      const buy = (kind: "card" | "relic" | "potion", idx: number, slot: { sold: boolean; price: number }): KeyAction =>
+        enterOr(shopBuyBlocked(slot, g.run.gold), cmd({ cmd: "shopBuy", kind, idx }));
       shop.cards.forEach((slot, idx) => {
-        out.push({ ...masterCard(bundle, slot.id, 0, out.length), enter: buy("card", idx, slot.sold) });
+        out.push({ ...masterCard(bundle, slot.id, 0, out.length), enter: buy("card", idx, slot) });
       });
       shop.relics.forEach((slot, idx) => {
-        out.push({ kind: "relic", at: out.length, enter: buy("relic", idx, slot.sold), defId: slot.id });
+        out.push({ kind: "relic", at: out.length, enter: buy("relic", idx, slot), defId: slot.id });
       });
       shop.potions.forEach((slot, idx) => {
-        out.push({ kind: "potion", at: out.length, enter: buy("potion", idx, slot.sold), defId: slot.id });
+        out.push({ kind: "potion", at: out.length, enter: buy("potion", idx, slot), defId: slot.id });
       });
       return out;
     }
@@ -1492,7 +1555,7 @@ function inspectables(g: GameState, source: InspectSource, bundle: ContentBundle
           return mc ? [masterCard(bundle, mc.defId, mc.upgrades, at)] : [];
         }
         const card = c.cards[iid];
-        return card ? [{ kind: "card" as const, at, enter: null, defId: card.defId, upgrades: card.upgrades, cost: instCostLabel(card) }] : [];
+        return card ? [{ kind: "card" as const, at, enter: null, defId: card.defId, upgrades: card.upgrades, cost: instCostLabel(getCardCost(g, bundle, card)) }] : [];
       });
     }
   }
@@ -1562,7 +1625,7 @@ function describeInspect(
     cost: ref.cost,
     color: CARD_TYPE_ACCENTS[def?.type ?? ""] ?? TIP_COLOR.card,
     type: `${titleCase(def?.type ?? "?")} - ${def?.rarity ?? "?"}`,
-    targeted: def?.target === "enemy",
+    targeted: needsEnemyTarget(def?.target),
     rules: cardRules(ref.defId, ref.upgrades),
     keywords: cardGlossary(ref.defId, ref.upgrades),
     alt: twoStates
@@ -1638,6 +1701,7 @@ function buildOverlay(g: GameState, top: Overlay, ui: UiState, focusI: number | 
     case "deck": {
       const deck = g.run.deck;
       const shopRoom = g.run.room?.kind === "shop" ? g.run.room : null;
+      const removalBlocked = top.mode === "remove" && shopRoom ? shopRemovalBlocked(shopRoom.shop, g.run.gold) : null;
       const title =
         top.mode === "view"
           ? `Deck - ${deck.length} card${deck.length === 1 ? "" : "s"}`
@@ -1657,8 +1721,8 @@ function buildOverlay(g: GameState, top: Overlay, ui: UiState, focusI: number | 
           label:
             `${cardName(bundle, mc.defId, mc.upgrades)} (${def ? masterCostLabel(masterCardCost(def, mc.upgrades)) : "?"}) [${def?.type ?? "?"}]` +
             (mc.bottled ? " [bottled]" : ""),
-          enabled: smithOk && removeOk,
-          note: !smithOk ? "can't upgrade" : !removeOk ? "bottled" : null,
+          enabled: smithOk && removeOk && removalBlocked === null,
+          note: !smithOk ? "can't upgrade" : !removeOk ? "bottled" : removalBlocked,
           action:
             top.mode === "smith"
               ? cmd({ cmd: "restOption", kind: "smith", deckIdx })
@@ -1694,7 +1758,7 @@ function buildOverlay(g: GameState, top: Overlay, ui: UiState, focusI: number | 
         const def = card ? bundle.cards.get(card.defId) : undefined;
         return {
           name: card ? (def?.name ?? card.defId) + (card.upgrades > 0 ? "+" : "") : `#${iid}`,
-          cost: card ? instCostLabel(card) : "?",
+          cost: card ? instCostLabel(getCardCost(g, bundle, card)) : "?",
           type: def?.type ?? "?",
         };
       });
@@ -1840,7 +1904,7 @@ function tipCard(bundle: ContentBundle, defId: string, upgrades: number, costLab
     color: CARD_TYPE_ACCENTS[def?.type ?? ""] ?? TIP_COLOR.card,
     name: toAscii(`${cardName(bundle, defId, upgrades)} (${costLabel})`),
     meta: toAscii(
-      `${titleCase(def?.type ?? "?")} - ${def?.rarity ?? "?"}${def?.target === "enemy" ? " - targets an enemy" : ""}${metaExtra}`,
+      `${titleCase(def?.type ?? "?")} - ${def?.rarity ?? "?"}${needsEnemyTarget(def?.target) ? " - targets an enemy" : ""}${metaExtra}`,
     ),
     lines: lines.map(toAscii),
   };
@@ -1921,6 +1985,7 @@ function intentSentence(bundle: ContentBundle, monsterId: string, info: IntentIn
   }
   if (info.heal > 0) clauses.push(`heal ${info.heal} HP`);
   if (info.hpLoss > 0) clauses.push(`take ${info.hpLoss} HP from you`);
+  if (info.goldLoss > 0) clauses.push(`steal up to ${info.goldLoss} Gold`);
   if (info.summons.length > 0) {
     const names = info.summons.map((id) => bundle.monsters.get(id)?.name ?? titleCase(id));
     clauses.push(`summon ${names.join(" and ")}`);
@@ -2085,14 +2150,14 @@ function combatFocus(g: GameState, ui: UiState, bundle: ContentBundle, accent: s
     return {
       count,
       idx,
-      tooltip: tipCard(bundle, card.defId, card.upgrades, instCostLabel(card)),
+      tooltip: tipCard(bundle, card.defId, card.upgrades, instCostLabel(getCardCost(g, bundle, card))),
       inspect: inspectAt(g, { of: "hand" }, bundle, k),
     };
   }
   k -= hand.length;
   if (k < alive.length) {
     const { m, i } = alive[k]!;
-    const info = getIntents(g, bundle)[i] ?? null;
+    const info = g.run.relics.some(r => r.defId === "RUNIC_DOME") ? null : getIntents(g, bundle)[i] ?? null;
     return { count, idx, tooltip: tipEnemy(bundle, m, info) };
   }
   k -= alive.length;
@@ -2164,7 +2229,8 @@ function targetingFocus(g: GameState, bundle: ContentBundle, targeting: Targetin
   const idx = targeting.focusIdx;
   const t = alive[idx];
   if (!t) return { count, idx, tooltip: null };
-  const info = g.combat ? (getIntents(g, bundle)[t.i] ?? null) : null;
+  const info = g.combat && !g.run.relics.some(r => r.defId === "RUNIC_DOME")
+    ? (getIntents(g, bundle)[t.i] ?? null) : null;
   return { count, idx, tooltip: tipEnemy(bundle, t.m, info) };
 }
 
@@ -2205,7 +2271,7 @@ function choiceFocus(g: GameState, pending: PendingChoice, overlay: OverlayView,
   }
   const card = g.combat.cards[iid];
   if (!card) return { count, idx, tooltip: tipChoiceItem(overlay.list, idx, accent) };
-  return { count, idx, tooltip: tipCard(bundle, card.defId, card.upgrades, instCostLabel(card)), inspect };
+  return { count, idx, tooltip: tipCard(bundle, card.defId, card.upgrades, instCostLabel(getCardCost(g, bundle, card))), inspect };
 }
 
 function overlayFocus(g: GameState, top: Overlay, overlay: OverlayView, bundle: ContentBundle, accent: string): FocusInfo {
@@ -2242,7 +2308,7 @@ function overlayFocus(g: GameState, top: Overlay, overlay: OverlayView, bundle: 
       return {
         count,
         idx,
-        tooltip: tipCard(bundle, e.card.defId, e.card.upgrades, instCostLabel(e.card)),
+        tooltip: tipCard(bundle, e.card.defId, e.card.upgrades, instCostLabel(getCardCost(g, bundle, e.card))),
         inspect: inspectAt(g, { of: "pile", pile: top.pile }, bundle, idx),
       };
     }
@@ -2364,7 +2430,7 @@ function hintFor(
   switch (mode) {
     case "menu": {
       const m = view.screen as MenuView;
-      return `[1-4] hero  [a/A] ascension  [s] seed  [n] new run${m.continueDesc ? "  [c] continue" : ""}  [q] quit`;
+      return `[1-4] hero  [a/A] ascension  [s/r] seed  [n] new run${m.continueDesc ? "  [c] continue" : ""}  [q] quit`;
     }
     case "textInput":
       return "type a seed - [Enter] confirm  [Esc] cancel";
@@ -2409,14 +2475,14 @@ function hintFor(
     case "shop": {
       const s = view.screen as ShopView;
       const paging = s.list.pages > 1 ? "  [n/p] page" : "";
-      return `[1-0] buy${paging}${insp}  [Enter] leave  [d/r/p]  [m] map  [q] quit`;
+      return `[1-0] buy${paging}${insp}  [Enter] leave  [P] potions  [d/r/m]  [q] quit`.replaceAll("  ", " ");
     }
     case "rest":
     case "treasure":
     case "event": {
       const s = view.screen as SimpleListScreen;
       const paging = s.list.pages > 1 ? "  [n/p] page" : "";
-      return `[1-9] choose${paging}  [d/r/p] deck/relics/potions  [m] map  [q] quit`;
+      return `[1-9] choose${paging}  [d/r/${s.list.pages > 1 ? "P" : "p"}] deck/relics/potions  [m] map  [q] quit`;
     }
     case "gameOver":
       return "[1] new run  [2] menu  [q] quit";
@@ -2505,7 +2571,7 @@ export function buildView(game: GameState | null, ui: UiState, bundle: ContentBu
       screen = buildTreasure(game, room, ui, ui.page, screenFocus, bundle);
       break;
     case "event":
-      screen = buildEvent(game, room, ui.page, screenFocus, bundle);
+      screen = buildEvent(game, room, ui, ui.page, screenFocus, bundle);
       break;
     case "gameOver":
       screen = buildGameOver(game, room, ui.page, screenFocus, bundle);

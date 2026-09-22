@@ -51,6 +51,7 @@ export const LOG_LIMIT = 200;
 export interface LogLine {
   text: string;
   era: number;
+  eventScope?: string;
 }
 
 export interface UiState {
@@ -140,9 +141,9 @@ export function resetRunUi(ui: UiState): UiState {
 }
 
 /** Append already-formatted lines to the current era (synthetic UI notes). */
-export function pushLogLines(ui: UiState, lines: string[]): UiState {
+export function pushLogLines(ui: UiState, lines: string[], eventScope?: string): UiState {
   if (lines.length === 0) return ui;
-  const log = [...ui.log, ...lines.map((text) => ({ text, era: ui.logEra }))];
+  const log = [...ui.log, ...lines.map((text) => ({ text, era: ui.logEra, ...(eventScope ? { eventScope } : {}) }))];
   if (log.length > LOG_LIMIT) log.splice(0, log.length - LOG_LIMIT);
   return { ...ui, log };
 }
@@ -165,12 +166,13 @@ export function pushLog(
   events: GameEvent[],
   bundle: ContentBundle,
   names: readonly string[] = [],
+  eventScope?: string,
 ): UiState {
   let next = ui;
   for (const ev of events) {
     if (ev.event === "combatStarted") next = { ...next, logEra: next.logEra + 1 };
     if (isHiddenPowerEvent(ev, bundle)) continue;
-    next = pushLogLines(next, [formatEvent(ev, bundle, names)]);
+    next = pushLogLines(next, [formatEvent(ev, bundle, names)], ev.event === "eventReveal" ? eventScope : undefined);
   }
   return next;
 }
