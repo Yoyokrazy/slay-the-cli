@@ -52,3 +52,6 @@ dist/
 /prefs.json
 /*.json.tmp
 /.ascend-nudge
+
+# bun --compile scratch binaries
+*.bun-build
