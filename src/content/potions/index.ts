@@ -13,6 +13,7 @@ import type { EffectCtx, PotionDef } from "../../engine/content/defs";
 import { needsEnemyTarget } from "../../engine/content/targeting";
 import { PLAYER, monster } from "../../engine/core/ids";
 import { drawCards } from "../../engine/combat/piles";
+import { obtainRandomPotion } from "../../engine/run/rewards";
 import { hasRelic } from "../util";
 import {
   aliveMonsterIdxs,
@@ -265,8 +266,8 @@ export const allPotions: PotionDef[] = [
   },
   {
     // "Fill all your empty potion slots with random potions."
-    // RUN-LAYER: random potion generation (potionRng + rarity weights) lives in
-    // the run layer. No-op until it lands.
+    // EntropicBrew.use rolls returnRandomPotion(true) once per potion slot;
+    // rolls that find no open slot are lost.
     id: "ENTROPIC_BREW",
     name: "Entropic Brew",
     rarity: "rare",
@@ -274,7 +275,10 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 0,
     sacredBarkDoubles: false,
-    onUse: () => {},
+    onUse: (ctx) => {
+      const slots = ctx.run.potions.length;
+      for (let i = 0; i < slots; i++) obtainRandomPotion(ctx, { limited: true });
+    },
   },
   {
     // "Channel [1|2] Dark for each orb slot." DEPENDS: DARK orb def.

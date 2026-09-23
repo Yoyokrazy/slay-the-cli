@@ -219,20 +219,45 @@ export function createCardReward(ctx: EffectCtx, room: RewardRoomKind): RolledCa
 
 // --- potions ---------------------------------------------------------------------
 
+export interface RandomPotionOptions {
+  /** returnRandomPotion(true): the spam check never returns Fruit Juice. */
+  limited?: boolean;
+}
+
 /** returnRandomPotion (Game.cpp:294-326): rarity d100 (<65 common, <90
- *  uncommon, else rare), then uniform pool draws until the rarity matches. */
-export function returnRandomPotion(ctx: EffectCtx): PotionId | null {
+ *  uncommon, else rare), then uniform pool draws until the rarity matches.
+ *  With `limited`, the spam check starts set, so the first draw is always
+ *  redrawn and Fruit Juice never clears it (returnRandomPotionOfRarity). */
+export function returnRandomPotion(ctx: EffectCtx, options: RandomPotionOptions = {}): PotionId | null {
   if (!canObtainPotions(ctx.run)) return null;
   const potionRng = ctx.rng("potionRng");
   const roll = potionRng.randomRange(0, 99);
   const rarity: CardRarityRoll =
     roll < POTION_DROP.commonBelow ? "common" : roll < POTION_DROP.uncommonBelow ? "uncommon" : "rare";
   const pool = potionPool(ctx);
-  if (!pool.some((id) => ctx.bundle.potions.get(id)!.rarity === rarity)) return null; // stub-bundle guard
-  for (;;) {
-    const id = pool[potionRng.random(pool.length - 1)]!;
-    if (ctx.bundle.potions.get(id)!.rarity === rarity) return id;
+  const limited = options.limited === true;
+  const matches = (id: PotionId) => ctx.bundle.potions.get(id)!.rarity === rarity;
+  if (!pool.some((id) => matches(id) && (!limited || id !== "FRUIT_JUICE"))) return null; // stub-bundle guard
+  const draw = () => pool[potionRng.random(pool.length - 1)]!;
+  let id = draw();
+  let spamCheck = limited;
+  while (!matches(id) || spamCheck) {
+    spamCheck = limited;
+    id = draw();
+    if (id !== "FRUIT_JUICE") spamCheck = false;
   }
+  return id;
+}
+
+/** Obtain a random potion into the first open slot; full belts lose the potion. */
+export function obtainRandomPotion(ctx: EffectCtx, options: RandomPotionOptions = {}): PotionId | null {
+  const id = returnRandomPotion(ctx, options);
+  if (!id) return null;
+  const slot = ctx.run.potions.indexOf(null);
+  if (slot === -1) return null;
+  ctx.run.potions[slot] = id;
+  ctx.emit("potionObtained", { id, slot });
+  return id;
 }
 
 /** addPotionRewards (GameContext.cpp:1755-1775): chance 40 + potionChance

@@ -10,6 +10,7 @@ import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
 import { allRelics, relicSupportPowers } from "../../src/content/relics";
 import { allPotions, effectivePotency } from "../../src/content/potions";
+import { returnRandomPotion } from "../../src/engine/run/rewards";
 
 // ---------------------------------------------------------------------------
 // local bundle (same pattern as relics.test.ts)
@@ -469,10 +470,118 @@ describe("potency plumbing", () => {
     expect(allPotions.length).toBe(42);
     let s = game({});
     // RUN-LAYER / ENGINE-GAP potions must not crash or corrupt state
-    for (const id of ["ENTROPIC_BREW", "FAIRY_POTION"]) {
+    for (const id of ["FAIRY_POTION"]) {
       s = usePotion(s, id);
       expect(s.pending).toBeNull();
     }
+  });
+
+  describe("Entropic Brew", () => {
+    test("fills every empty combat slot, including its own consumed slot", () => {
+      const s0 = game({ seed: "BREW-COMBAT" });
+      s0.run.potions = ["ENTROPIC_BREW", "FIRE_POTION", null];
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.potions[1]).toBe("FIRE_POTION");
+      expect(s.run.potions.filter((p) => p !== null)).toHaveLength(3);
+      expect(s.run.potions[0]).not.toBeNull();
+      expect(s.run.potions[2]).not.toBeNull();
+    });
+
+    test("works out of combat", () => {
+      const s0 = game({ seed: "BREW-MAP" });
+      s0.combat = null;
+      s0.run.potions = ["ENTROPIC_BREW", null, "BLOCK_POTION"];
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.combat).toBeNull();
+      expect(s.run.potions[2]).toBe("BLOCK_POTION");
+      expect(s.run.potions.filter((p) => p !== null)).toHaveLength(3);
+    });
+
+    test("Sozu blocks the obtained potions", () => {
+      const s0 = game({ seed: "BREW-SOZU", relics: ["SOZU"] });
+      s0.run.potions = ["ENTROPIC_BREW", null, null];
+      const before = s0.rng.run.potionRng.counter;
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.potions).toEqual([null, null, null]);
+      expect(s.rng.run.potionRng.counter).toBe(before);
+    });
+
+    test("limited random potions never produce Fruit Juice", () => {
+      for (let seed = 0; seed < 60; seed++) {
+        const s = game({ seed: `BREW-LIMITED-${seed}` });
+        const registry = RngRegistry.fromState(s.rng);
+        const ctx: EffectCtx = {
+          run: s.run,
+          combat: s.combat,
+          queue: new ActionQueue(),
+          bundle: B,
+          rt: { pending: null, currentItem: null, combatOver: null },
+          rng: (st: Stream) => registry.get(st),
+          asc: s.run.ascension,
+          emit: () => {},
+          requestChoice: () => {},
+        };
+        for (let i = 0; i < 20; i++) expect(returnRandomPotion(ctx, { limited: true })).not.toBe("FRUIT_JUICE");
+      }
+    });
+
+    test("fixed seed is deterministic", () => {
+      const setup = () => {
+        const s = game({ seed: "BREW-DETERMINISTIC" });
+        s.run.potions = ["ENTROPIC_BREW", null, "FIRE_POTION"];
+        return advance(s, { cmd: "usePotion", slot: 0 }, B);
+      };
+      const a = setup();
+      const b = setup();
+      expect(a.run.potions).toEqual(b.run.potions);
+      expect(a.rng.run.potionRng).toEqual(b.rng.run.potionRng);
+    });
+
+    const potionCtx = (s: GameState): { ctx: EffectCtx; registry: RngRegistry } => {
+      const registry = RngRegistry.fromState(s.rng);
+      const ctx: EffectCtx = {
+        run: s.run,
+        combat: s.combat,
+        queue: new ActionQueue(),
+        bundle: B,
+        rt: { pending: null, currentItem: null, combatOver: null },
+        rng: (st: Stream) => registry.get(st),
+        asc: s.run.ascension,
+        emit: () => {},
+        requestChoice: () => {},
+      };
+      return { ctx, registry };
+    };
+
+    test("limited rolls always redraw the first pick (spam check)", () => {
+      for (let seed = 0; seed < 40; seed++) {
+        const s = game({ seed: `BREW-SPAM-${seed}` });
+        const { ctx, registry } = potionCtx(s);
+        const rng = registry.get("potionRng");
+        const before = rng.counter;
+        returnRandomPotion(ctx, { limited: true });
+        // rarity roll + the discarded first draw + at least one redraw
+        expect(rng.counter - before).toBeGreaterThanOrEqual(3);
+        const mid = rng.counter;
+        returnRandomPotion(ctx);
+        expect(rng.counter - mid).toBeGreaterThanOrEqual(2);
+      }
+    });
+
+    test("rolls once per potion slot even when only its own slot is free", () => {
+      const s0 = game({ seed: "BREW-ROLLS" });
+      s0.run.potions = ["ENTROPIC_BREW", "FIRE_POTION", "BLOCK_POTION"];
+      const expected = structuredClone(s0);
+      expected.run.potions = [null, "FIRE_POTION", "BLOCK_POTION"];
+      const { ctx, registry } = potionCtx(expected);
+      const first = returnRandomPotion(ctx, { limited: true });
+      returnRandomPotion(ctx, { limited: true });
+      returnRandomPotion(ctx, { limited: true });
+
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.potions).toEqual([first, "FIRE_POTION", "BLOCK_POTION"]);
+      expect(s.rng.run.potionRng.counter).toBe(registry.get("potionRng").counter);
+    });
   });
 
   describe("Smoke Bomb", () => {

@@ -4,7 +4,7 @@
 import type { CardDef } from "../../../engine/content/defs";
 import { calcCardDamage } from "../../../engine/combat/damageCalc";
 import { PLAYER, monster } from "../../../engine/core/ids";
-import { returnRandomPotion } from "../../../engine/run/rewards";
+import { obtainRandomPotion } from "../../../engine/run/rewards";
 
 export const silentRares: CardDef[] = [
   {
@@ -50,15 +50,8 @@ export const silentRares: CardDef[] = [
     upgradeValues: { cost: 0 },
     keywords: ["exhaust", "tag:healing"],
     onPlay: (ctx) => {
-      // "Obtain a random potion." The corpus doesn't pin the stream; the
-      // game's returnRandomPotion consumes potionRng - reuse the run-layer
-      // roller for exactness.
-      const id = returnRandomPotion(ctx);
-      if (!id) return;
-      const slot = ctx.run.potions.indexOf(null);
-      if (slot === -1) return; // no free potion slot: the potion is lost
-      ctx.run.potions[slot] = id;
-      ctx.emit("potionObtained", { id, slot });
+      // "Obtain a random potion." Uses returnRandomPotion(true), so Fruit Juice is excluded.
+      obtainRandomPotion(ctx, { limited: true });
     },
   },
   {
