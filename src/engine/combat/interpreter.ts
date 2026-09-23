@@ -16,6 +16,7 @@ import { channelOrb, evokeOrb, changeOrbSlots, triggerEndOfTurnOrbs, triggerStar
 import { changeStance, gainMantra, stanceAtEndOfTurn } from "./stanceRuntime";
 
 const ITERATION_CAP = 20000; // infinite-combo guard (Dead Branch + Corruption loops)
+const BLOOD_FOR_BLOOD = "BLOOD_FOR_BLOOD";
 
 // ------------------------------------------------------------------------------
 // main loop
@@ -213,6 +214,7 @@ function applyDamage(ctx: EffectCtx, target: ActorRef, info: DamageInfo): void {
   if (d > 0) {
     ctx.run.hp = Math.max(0, ctx.run.hp - d);
     ctx.combat!.combatFlags.hpLostThisCombat += d;
+    onPlayerHpLost(ctx);
     fireHook(ctx, PLAYER, "wasHPLost", info, d);
     checkBloodied(ctx);
   }
@@ -237,9 +239,28 @@ function applyHpLoss(ctx: EffectCtx, target: ActorRef, amount: number): void {
   if (d <= 0) return;
   ctx.run.hp = Math.max(0, ctx.run.hp - d);
   ctx.combat!.combatFlags.hpLostThisCombat += d;
+  onPlayerHpLost(ctx);
   fireHook(ctx, PLAYER, "wasHPLost", { type: "hpLoss", source: null, amount: d }, d);
   checkBloodied(ctx);
   if (ctx.run.hp <= 0) playerDeath(ctx);
+}
+
+function onPlayerHpLost(ctx: EffectCtx): void {
+  const flags = ctx.combat!.combatFlags;
+  flags.hpLossInstancesThisCombat = (flags.hpLossInstancesThisCombat ?? 0) + 1;
+  updateBloodForBloodCosts(ctx, 1);
+}
+
+function updateBloodForBloodCosts(ctx: EffectCtx, amount: number): void {
+  const combat = ctx.combat!;
+  for (const pile of ["hand", "draw", "discard"] as const) {
+    for (const iid of combat.player.piles[pile]) {
+      const c = combat.cards[iid];
+      if (!c || c.defId !== BLOOD_FOR_BLOOD) continue;
+      c.cost = Math.max(0, c.cost - amount);
+      c.costForTurn = Math.max(0, c.costForTurn - amount);
+    }
+  }
 }
 
 function applyHeal(ctx: EffectCtx, target: ActorRef, amount: number): void {
@@ -421,7 +442,9 @@ export function makeTempCard(ctx: EffectCtx, defId: string, upgrades: number, de
   if (!def) throw new Error(`unknown card def ${defId}`);
   upgrades = Math.floor(foldHook(ctx, PLAYER, "modifyCreatedCardUpgrades", upgrades, defId)); // Master Reality
   const iid = combat.nextCardInstanceId++;
-  const cost = def.cost;
+  const baseCost = upgrades > 0 && def.upgradeValues.cost !== undefined ? def.upgradeValues.cost : def.cost;
+  const priorBloodForBloodReduction = defId === BLOOD_FOR_BLOOD ? (combat.combatFlags.hpLossInstancesThisCombat ?? 0) : 0;
+  const cost = baseCost < 0 ? baseCost : Math.max(0, baseCost - priorBloodForBloodReduction);
   combat.cards[iid] = {
     iid,
     defId,

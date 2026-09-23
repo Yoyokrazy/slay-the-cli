@@ -4,6 +4,7 @@
 
 import { test, expect, describe } from "bun:test";
 import { advance } from "../../src/engine/game";
+import type { Pile } from "../../src/engine/combat/combatState";
 import {
   bundle,
   fight,
@@ -68,6 +69,33 @@ describe("BLOODLETTING", () => {
 
 describe("BLOOD_FOR_BLOOD", () => {
   const deck = ["BLOOD_FOR_BLOOD", "HEMOKINESIS", "STRIKE_RED", "STRIKE_RED", "STRIKE_RED"];
+  const piles = ["draw", "hand", "discard", "exhaust", "limbo"] as const;
+
+  function removeIidFromPiles(s: ReturnType<typeof fight>, iid: number): void {
+    for (const pile of piles) {
+      const p = s.combat!.player.piles[pile];
+      const idx = p.indexOf(iid);
+      if (idx !== -1) p.splice(idx, 1);
+    }
+  }
+
+  function iidsForDef(s: ReturnType<typeof fight>, defId: string): number[] {
+    return Object.values(s.combat!.cards)
+      .filter((c) => c.defId === defId)
+      .map((c) => c.iid);
+  }
+
+  function moveIidToPile(s: ReturnType<typeof fight>, iid: number, pile: Pile): void {
+    removeIidFromPiles(s, iid);
+    s.combat!.player.piles[pile].push(iid);
+  }
+
+  function moveFirstToPile(s: ReturnType<typeof fight>, defId: string, pile: Pile): number {
+    const iid = iidsForDef(s, defId)[0];
+    if (iid === undefined) throw new Error(`${defId} not found`);
+    moveIidToPile(s, iid, pile);
+    return iid;
+  }
 
   test("base: cost 4, reduced by 1 per HP-loss instance this combat", () => {
     let s = fight({ deck });
@@ -79,12 +107,80 @@ describe("BLOOD_FOR_BLOOD", () => {
     expect(monsterHp(s)).toBe(200 - 15 - 18);
   });
 
+  test("loss before first draw reduces copies in draw pile", () => {
+    let s = fight({ deck: ["BLOOD_FOR_BLOOD", "BLOODLETTING", ...strikes(8)] });
+    const bfb = moveFirstToPile(s, "BLOOD_FOR_BLOOD", "draw");
+    moveFirstToPile(s, "BLOODLETTING", "hand");
+    expect(s.combat!.cards[bfb]!.costForTurn).toBe(4);
+    s = play(s, "BLOODLETTING");
+    expect(s.combat!.cards[bfb]!.cost).toBe(3);
+    expect(s.combat!.cards[bfb]!.costForTurn).toBe(3);
+  });
+
+  test("blocked attacks with no HP loss do not reduce cost", () => {
+    let s = fight({ deck: ["BLOOD_FOR_BLOOD", ...strikes(9)] });
+    const bfb = moveFirstToPile(s, "BLOOD_FOR_BLOOD", "draw");
+    s.combat!.player.block = 10;
+    s = endTurn(s);
+    expect(s.run.hp).toBe(80);
+    expect(s.combat!.cards[bfb]!.cost).toBe(4);
+    expect(s.combat!.cards[bfb]!.costForTurn).toBe(4);
+  });
+
+  test("copies in exhaust are not reduced by later HP loss", () => {
+    let s = fight({ deck: ["BLOOD_FOR_BLOOD", "BLOOD_FOR_BLOOD", "BLOODLETTING", ...strikes(7)] });
+    const [exhausted, active] = iidsForDef(s, "BLOOD_FOR_BLOOD");
+    if (exhausted === undefined || active === undefined) throw new Error("expected two Blood for Blood copies");
+    moveIidToPile(s, exhausted, "exhaust");
+    moveIidToPile(s, active, "draw");
+    moveFirstToPile(s, "BLOODLETTING", "hand");
+    s = play(s, "BLOODLETTING");
+    expect(s.combat!.cards[exhausted]!.cost).toBe(4);
+    expect(s.combat!.cards[exhausted]!.costForTurn).toBe(4);
+    expect(s.combat!.cards[active]!.cost).toBe(3);
+    expect(s.combat!.cards[active]!.costForTurn).toBe(3);
+  });
+
+  test("cost reduction floors at zero", () => {
+    let s = fight({ deck: ["BLOOD_FOR_BLOOD", "BLOODLETTING", "BLOODLETTING", "BLOODLETTING", "BLOODLETTING", "BLOODLETTING"] });
+    const bfb = moveFirstToPile(s, "BLOOD_FOR_BLOOD", "draw");
+    for (const iid of iidsForDef(s, "BLOODLETTING")) moveIidToPile(s, iid, "hand");
+    for (let i = 0; i < 5; i++) s = play(s, "BLOODLETTING");
+    expect(s.combat!.cards[bfb]!.cost).toBe(0);
+    expect(s.combat!.cards[bfb]!.costForTurn).toBe(0);
+  });
+
+  test("new copies created mid-combat include prior HP-loss reductions", () => {
+    let s = fight({ deck: ["BLOOD_FOR_BLOOD", "DUAL_WIELD", "BLOODLETTING", ...strikes(7)] });
+    moveFirstToPile(s, "BLOOD_FOR_BLOOD", "hand");
+    moveFirstToPile(s, "DUAL_WIELD", "hand");
+    moveFirstToPile(s, "BLOODLETTING", "hand");
+    s = play(s, "BLOODLETTING");
+    s = play(s, "DUAL_WIELD");
+    s = choose(s, [choiceIndexOf(s, "BLOOD_FOR_BLOOD")]);
+    const bloodForBloodCosts = s.combat!.player.piles.hand
+      .map((iid) => s.combat!.cards[iid]!)
+      .filter((c) => c.defId === "BLOOD_FOR_BLOOD")
+      .map((c) => c.costForTurn);
+    expect(bloodForBloodCosts).toEqual([3, 3]);
+  });
+
   test("upgraded: cost 3, damage 22", () => {
     let s = fight({ deck: [{ defId: "BLOOD_FOR_BLOOD", upgrades: 1 }, ...deck.slice(1)] });
     s = play(s, "HEMOKINESIS", 0); // cost 3 -> 2
     s = play(s, "BLOOD_FOR_BLOOD", 0);
     expect(s.combat!.player.energy).toBe(0);
     expect(monsterHp(s)).toBe(200 - 15 - 22);
+  });
+
+  test("upgraded copies in draw start from cost 3 before reductions", () => {
+    let s = fight({ deck: [{ defId: "BLOOD_FOR_BLOOD", upgrades: 1 }, "BLOODLETTING", ...strikes(8)] });
+    const bfb = moveFirstToPile(s, "BLOOD_FOR_BLOOD", "draw");
+    moveFirstToPile(s, "BLOODLETTING", "hand");
+    expect(s.combat!.cards[bfb]!.costForTurn).toBe(3);
+    s = play(s, "BLOODLETTING");
+    expect(s.combat!.cards[bfb]!.cost).toBe(2);
+    expect(s.combat!.cards[bfb]!.costForTurn).toBe(2);
   });
 });
 

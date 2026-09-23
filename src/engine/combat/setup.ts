@@ -94,6 +94,7 @@ export function buildCombatState(
       powersPlayedThisCombat: 0,
       turnsTaken: 0,
       hpLostThisCombat: 0,
+      hpLossInstancesThisCombat: 0,
       encounterId,
     },
   };

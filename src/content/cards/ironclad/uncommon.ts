@@ -51,14 +51,6 @@ export const ironcladUncommons: CardDef[] = [
     values: { damage: 18 },
     upgradeValues: { cost: 3, damage: 22 },
     keywords: [],
-    // ENGINE-GAP: CardDef.dynamicCost is declared but never consulted by the
-    // engine (effectiveCost only folds modifyCardCost), and hpLostThisCombat
-    // tracks amounts, not instances. The hidden BLOOD_FOR_BLOOD helper power
-    // (applied on draw) decrements each copy's cost/costForTurn once per
-    // HP-loss event instead; losses before the first copy is drawn are missed.
-    onDrawThis: (ctx) => {
-      ctx.queue.addToBottom({ kind: "applyPower", source: PLAYER, target: PLAYER, powerId: "BLOOD_FOR_BLOOD", amount: 1 });
-    },
     primitives: [{ do: "damage", n: "damage" }],
   },
   {

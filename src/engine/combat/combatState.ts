@@ -110,6 +110,7 @@ export interface CombatState {
     powersPlayedThisCombat: number;
     turnsTaken: number;
     hpLostThisCombat: number;
+    hpLossInstancesThisCombat: number;
     /** monster encounter id for reward bookkeeping */
     encounterId: string;
   };

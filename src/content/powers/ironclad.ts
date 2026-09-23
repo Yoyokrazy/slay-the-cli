@@ -298,28 +298,15 @@ export const ironcladPowers: PowerDef[] = [
 
   // --- helper powers (engine workarounds; not in the corpus power list) --------
   {
-    // ENGINE-GAP workaround: "costs 1 less each TIME you lose HP this combat".
-    // combatFlags.hpLostThisCombat accumulates AMOUNTS, not instances, and card
-    // defs have no wasHPLost hook, so the card applies this hidden power when
-    // drawn; it decrements every BLOOD_FOR_BLOOD instance's cost per HP-loss
-    // event. Losses occurring before the first copy is drawn are not counted
-    // (the real game counts from combat start via AbstractPlayer.wasHPLost).
+    // Save-compatibility shim for old combats that already contain the former
+    // helper power. Blood for Blood cost updates now live in the damage pipeline.
     id: "BLOOD_FOR_BLOOD",
     name: "Blood for Blood",
     hidden: true, // engine bookkeeping, never shown
     kind: "buff",
     stacking: "none",
     turnBased: false,
-    hooks: {
-      wasHPLost: (ctx, _info, amount) => {
-        if (amount <= 0) return;
-        for (const c of Object.values(ctx.combat!.cards)) {
-          if (c.defId !== "BLOOD_FOR_BLOOD") continue;
-          c.cost = Math.max(0, c.cost - 1);
-          c.costForTurn = Math.max(0, c.costForTurn - 1);
-        }
-      },
-    },
+    hooks: {},
   },
   {
     // Normality's in-hand veto. ENGINE-GAP workaround: cards in hand cannot veto
