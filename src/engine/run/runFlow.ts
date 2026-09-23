@@ -603,6 +603,15 @@ export function runDeckChoiceResume(ctx: EffectCtx, args: unknown): void {
   run.room = { kind: "map" };
 }
 
+/**
+ * AbstractPlayer.loseGold fires onSpendGold only inside a ShopRoom; Maw Bank's
+ * handler uses itself up for the rest of the run (counter 1 = used up).
+ */
+function noteShopSpend(run: RunState): void {
+  const maw = run.relics.find((r) => r.defId === "MAW_BANK");
+  if (maw) maw.counter = 1;
+}
+
 // --- room entry ---------------------------------------------------------------------------
 
 function enterResolvedRoom(state: GameState, ctx: EffectCtx, kind: RoomKind, burning: boolean): void {
@@ -816,6 +825,7 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
         slot.sold = true;
         run.potions[free] = slot.id;
       }
+      noteShopSpend(run);
       break;
     }
 
@@ -830,6 +840,7 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
       // GameContext.cpp:3802 - canTransform() && !isCardBottled)
       if (purge.bottled) throw new Error("a bottled card cannot be removed");
       run.gold -= shop.removalCost;
+      noteShopSpend(run);
       removeDeckCard(ctx, cmd.deckIdx, "shop:remove");
       run.history.cardRemovesPurchased++;
       shop.removalUsed = true;

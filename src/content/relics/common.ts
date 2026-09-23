@@ -207,8 +207,8 @@ export const commonRelics: RelicDef[] = [
   },
   {
     // "Whenever you climb a floor, gain 12 Gold. No longer works when you spend
-    // any Gold at a shop." RUN-LAYER: onEnterRoom not fired yet; the shop layer
-    // must set counter=1 on any purchase to disable it.
+    // any Gold at a shop." runFlow's noteShopSpend sets counter=1 on any shop
+    // purchase or removal to use it up.
     id: "MAW_BANK",
     name: "Maw Bank",
     tier: "common",

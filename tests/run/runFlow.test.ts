@@ -43,6 +43,10 @@ const matryoshkaBundle = makeRunTestBundle();
 const matryoshkaDef = allRelics.find((r) => r.id === "MATRYOSHKA");
 if (!matryoshkaDef) throw new Error("missing MATRYOSHKA relic");
 matryoshkaBundle.relics.set(matryoshkaDef.id, matryoshkaDef);
+const mawBundle = makeRunTestBundle();
+const mawDef = allRelics.find((r) => r.id === "MAW_BANK");
+if (!mawDef) throw new Error("missing MAW_BANK relic");
+mawBundle.relics.set(mawDef.id, mawDef);
 
 const run = (seed: string, ascension = 0): GameState => createRun({ seed, bundle, character: "IRONCLAD", ascension });
 const eggRun = (seed: string): GameState => createRun({ seed, bundle: eggBundle, character: "IRONCLAD" });
@@ -198,6 +202,51 @@ describe("master deck obtain hooks", () => {
       const bought = s.run.deck[s.run.deck.length - 1]!;
       expect(bought.defId).toBe(c.card);
       expect(bought.upgrades).toBe(1);
+    });
+  }
+});
+
+describe("Maw Bank", () => {
+  function mawShopRun(): GameState {
+    const s = createRun({ seed: "MAWBANK", bundle: mawBundle, character: "IRONCLAD" });
+    s.run.gold = 500;
+    s.run.relics.push({ defId: "MAW_BANK", counter: 0 });
+    s.run.room = {
+      kind: "shop",
+      shop: {
+        cards: Array.from({ length: 7 }, () => ({ id: "T_STRIKE", rarity: "common" as const, price: 10, sold: false, colorless: false })),
+        relics: Array.from({ length: 3 }, () => ({ id: "T_RELIC_C_A", tier: "common" as const, price: 999, sold: false })),
+        potions: Array.from({ length: 3 }, () => ({ id: "T_POT_C_A", price: 10, sold: false })),
+        removalCost: 10,
+        removalUsed: false,
+      },
+    };
+    return s;
+  }
+
+  function climbAfterShop(s: GameState): { before: number; after: number } {
+    s = advance(s, { cmd: "proceed" }, mawBundle);
+    const before = s.run.gold;
+    const x = s.run.map!.rows[0]!.findIndex((n) => n !== null);
+    s = advance(s, { cmd: "mapPick", x, y: 0 }, mawBundle);
+    return { before, after: s.run.gold };
+  }
+
+  test("leaving a shop without spending keeps paying 12 Gold per floor", () => {
+    const { before, after } = climbAfterShop(mawShopRun());
+    expect(after).toBe(before + 12);
+  });
+
+  for (const buy of [
+    { cmd: "shopBuy", kind: "card", idx: 0 },
+    { cmd: "shopBuy", kind: "potion", idx: 0 },
+    { cmd: "shopRemove", deckIdx: 0 },
+  ] as const) {
+    test(`${buy.cmd}${"kind" in buy ? `:${buy.kind}` : ""} uses it up for later floors`, () => {
+      const s = advance(mawShopRun(), buy, mawBundle);
+      expect(s.run.relics.find((r) => r.defId === "MAW_BANK")?.counter).toBe(1);
+      const { before, after } = climbAfterShop(s);
+      expect(after).toBe(before);
     });
   }
 });
