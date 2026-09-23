@@ -9,6 +9,7 @@ import { PLAYER } from "../core/ids";
 import type { CardInstanceId } from "../core/ids";
 import type { EffectCtx } from "../content/defs";
 import type { CardInstance, Pile } from "./combatState";
+import { getPower } from "./powerRuntime";
 
 export const HAND_LIMIT = 10;
 
@@ -72,9 +73,12 @@ export function reshuffleDiscardIntoDraw(ctx: EffectCtx): void {
 /**
  * Draw n cards one at a time: reshuffle when draw is empty; stop entirely if
  * both piles are empty or the hand is full. Fires onDraw hooks + onDrawThis.
+ * No Draw (Battle Trance / Bullet Time) vetoes the whole draw before any
+ * reshuffle, matching DrawCardAction's early hasPower("No Draw") exit.
  */
 export function drawCards(ctx: EffectCtx, n: number): void {
   const piles = ctx.combat!.player.piles;
+  if (n > 0 && getPower(ctx, PLAYER, "NO_DRAW")) return;
   for (let i = 0; i < n; i++) {
     if (piles.hand.length >= HAND_LIMIT) {
       ctx.emit("drawFizzled", { remaining: n - i });

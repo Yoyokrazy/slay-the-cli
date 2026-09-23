@@ -35,6 +35,21 @@ describe("BATTLE_TRANCE / NO_DRAW", () => {
       expect(playerPower(s, "NO_DRAW")).toBeUndefined();
     }
   });
+
+  test("No Draw vetoes later card draws this turn; next turn draws normally", () => {
+    let s = fightWithInHand(["BATTLE_TRANCE", "POMMEL_STRIKE"], {
+      deck: ["BATTLE_TRANCE", "POMMEL_STRIKE", ...strikes(12)],
+    });
+    s = play(s, "BATTLE_TRANCE");
+    const handAfterTrance = handNames(s).length;
+    const drawAfterTrance = pileNames(s, "draw").length;
+    s = play(s, "POMMEL_STRIKE");
+    expect(handNames(s).length).toBe(handAfterTrance - 1);
+    expect(pileNames(s, "draw").length).toBe(drawAfterTrance);
+    s = endTurn(s);
+    expect(playerPower(s, "NO_DRAW")).toBeUndefined();
+    expect(handNames(s).length).toBe(5);
+  });
 });
 
 describe("BLOODLETTING", () => {
