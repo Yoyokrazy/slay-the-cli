@@ -10,9 +10,8 @@
 // contentEffects (registered lazily + exported for static bundle merge).
 
 import type { EffectCtx, PotionDef } from "../../engine/content/defs";
-import { needsEnemyTarget } from "../../engine/content/targeting";
 import { PLAYER, monster } from "../../engine/core/ids";
-import { drawCards } from "../../engine/combat/piles";
+import { drawCards, moveCard } from "../../engine/combat/piles";
 import { obtainRandomPotion } from "../../engine/run/rewards";
 import { hasRelic } from "../util";
 import {
@@ -187,9 +186,11 @@ export const allPotions: PotionDef[] = [
   },
   {
     // "Play the top [3|6] cards of your draw pile."
-    // PARTIAL: the top cards are captured at use time; the game re-reads the top
-    // as each play resolves (differs only if a played card reorders the pile).
-    // Random targets rolled with cardRandomRng at use time.
+    // Distilled Chaos adds several PlayTopCardActions; the action queue drains
+    // their NewQueue actions before cardQueue resolves, so all selected cards
+    // are out of draw before any of them is used. We keep staged queued cards in
+    // limbo for engine card-conservation; Perfected Strike counts only hand,
+    // draw, and discard, matching the reference's post-Unlimbo use timing.
     id: "DISTILLED_CHAOS",
     name: "Distilled Chaos",
     rarity: "uncommon",
@@ -201,13 +202,10 @@ export const allPotions: PotionDef[] = [
       const combat = ctx.combat!;
       const top = combat.player.piles.draw.slice(0, potency);
       for (const iid of top) {
-        const def = ctx.bundle.cards.get(combat.cards[iid]!.defId);
-        let target: number | null = null;
-        if (def && needsEnemyTarget(def.target)) {
-          const alive = aliveMonsterIdxs(ctx);
-          if (alive.length === 0) continue;
-          target = alive[ctx.rng("cardRandomRng").random(alive.length - 1)]!;
-        }
+        const alive = aliveMonsterIdxs(ctx);
+        if (alive.length === 0) continue;
+        const target = alive[ctx.rng("cardRandomRng").random(alive.length - 1)]!;
+        moveCard(ctx, iid, "limbo");
         combat.cardQueue.push({
           iid,
           target,

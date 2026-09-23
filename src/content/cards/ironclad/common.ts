@@ -16,9 +16,11 @@ function instanceKeywords(ctx: CardCtx, iid: number): string[] {
 
 /**
  * Perfected Strike: count cards with the "strike" keyword. V2.3.4 counts
- * hand + draw + discard at use time (exhaust pile excluded); the count happens
- * before the played card leaves the hand, so the card itself (now in limbo) is
- * included explicitly.
+ * hand + draw + discard at use time (exhaust pile excluded). Reference hand
+ * plays calculate damage before AbstractPlayer.useCard removes the card from
+ * hand, so this engine explicitly counts the resolving card only for non-
+ * autoplay plays. PlayTopCardAction has already unlimbo'd autoplayed cards out
+ * of all three counted piles before use, so those cards do not count themselves.
  */
 function countStrikes(ctx: CardCtx): number {
   const piles = ctx.combat!.player.piles;
@@ -26,7 +28,7 @@ function countStrikes(ctx: CardCtx): number {
   for (const pile of ["draw", "hand", "discard"] as const) {
     for (const iid of piles[pile]) if (instanceKeywords(ctx, iid).includes("strike")) n++;
   }
-  if (instanceKeywords(ctx, ctx.card.iid).includes("strike")) n++;
+  if (!ctx.rt.currentItem?.autoplayed && instanceKeywords(ctx, ctx.card.iid).includes("strike")) n++;
   return n;
 }
 

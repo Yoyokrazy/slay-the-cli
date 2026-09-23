@@ -8,6 +8,7 @@ import { runQueue } from "../../src/engine/combat/interpreter";
 import { makeTestBundle } from "../helpers/testBundle";
 import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
+import { ironcladCommons } from "../../src/content/cards/ironclad/common";
 import { allRelics, relicSupportPowers } from "../../src/content/relics";
 import { allPotions, effectivePotency } from "../../src/content/potions";
 import { returnRandomPotion } from "../../src/engine/run/rewards";
@@ -48,6 +49,7 @@ function makeBundle(): ContentBundle {
   for (const r of allRelics) b.relics.set(r.id, r);
   for (const p of allPotions) b.potions.set(p.id, p);
   for (const c of [...extraCards, ...ironcladBasics]) b.cards.set(c.id, c);
+  for (const c of ironcladCommons.filter((c) => c.id === "PERFECTED_STRIKE" || c.id === "POMMEL_STRIKE" || c.id === "SHRUG_IT_OFF")) b.cards.set(c.id, c);
   for (const s of stances) b.stances.set(s.id, s);
   return b;
 }
@@ -408,6 +410,35 @@ describe("card-manipulation potions", () => {
     expect(monsterHp(s)).toBe(Math.max(0, hp0 - 18)); // 3 strikes x 6
     expect(s.combat!.player.energy).toBe(e0);
     expect(s.combat!.player.piles.draw.length).toBe(4); // 12 - 5 hand - 3 played
+  });
+
+  test("Distilled Chaos Perfected Strike+ uses PlayTopCardAction pile timing", () => {
+    let s = game({
+      deck: [
+        ...Array(5).fill({ defId: "STRIKE_RED" }),
+        { defId: "POMMEL_STRIKE" },
+        ...Array(3).fill({ defId: "PERFECTED_STRIKE", upgrades: 1 }),
+        { defId: "SHRUG_IT_OFF", upgrades: 1 },
+      ],
+    });
+    s.combat!.monsters[0]!.hp = 200;
+    s.combat!.monsters[0]!.maxHp = 200;
+    s.combat!.player.powers.push({ id: "STRENGTH", amount: 2, justApplied: false, data: null });
+
+    const perfected = Object.values(s.combat!.cards).filter((c) => c.defId === "PERFECTED_STRIKE");
+    const shrug = Object.values(s.combat!.cards).find((c) => c.defId === "SHRUG_IT_OFF")!;
+    const otherStrikes = Object.values(s.combat!.cards).filter(
+      (c) => c.defId === "STRIKE_RED" || c.defId === "POMMEL_STRIKE",
+    );
+    s.combat!.player.piles.hand = [];
+    s.combat!.player.piles.draw = [shrug.iid, perfected[0]!.iid, perfected[1]!.iid, perfected[2]!.iid, ...otherStrikes.map((c) => c.iid)];
+    s.combat!.player.piles.discard = [];
+    s.combat!.player.piles.exhaust = [];
+    s.combat!.player.piles.limbo = [];
+
+    s = usePotion(s, "DISTILLED_CHAOS");
+    expect(monsterHp(s)).toBe(200 - 61);
+    expect(handNames(s)).toEqual(["PERFECTED_STRIKE"]);
   });
 
   test("Duplication Potion: the next card is played twice, paid once", () => {

@@ -475,18 +475,25 @@ function resolveCardPlay(ctx: EffectCtx, item: CardQueueItem): void {
   if (needsEnemyTarget(def.target) && item.target !== null) {
     const t = combat.monsters[item.target];
     if (!t || t.isDead || t.isEscaped) {
+      // Purge copies and staged autoplay cards (already in limbo) must not be
+      // orphaned; a card still in hand simply stays there.
+      if (item.purgeOnUse) {
+        removeCardFromCombat(ctx, item.iid);
+      } else if (pileOf(ctx, item.iid) === "limbo") {
+        item.exhaustOnUse ||= cardHasKeyword(c, def, "exhaust");
+        if (item.exhaustOnUse) exhaustCard(ctx, item.iid);
+        else moveCard(ctx, item.iid, "discard");
+      }
       ctx.rt.currentItem = null;
       return;
     }
   }
 
-  // the card leaves the hand (to limbo) the moment it starts resolving
+  // The card leaves its current pile (hand for manual plays, draw for
+  // PlayTopCardAction-style autoplay) the moment it starts resolving.
   if (!item.purgeOnUse) {
-    const handIdx = combat.player.piles.hand.indexOf(item.iid);
-    if (handIdx !== -1) {
-      combat.player.piles.hand.splice(handIdx, 1);
-      combat.player.piles.limbo.push(item.iid);
-    }
+    const pile = pileOf(ctx, item.iid);
+    if (pile && pile !== "limbo") moveCard(ctx, item.iid, "limbo");
   }
 
   item.exhaustOnUse ||= cardHasKeyword(c, def, "exhaust");

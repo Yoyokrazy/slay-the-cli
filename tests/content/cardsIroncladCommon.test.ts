@@ -149,6 +149,30 @@ describe("PERFECTED_STRIKE", () => {
     s = play(s, "PERFECTED_STRIKE", 0);
     expect(monsterHp(s)).toBe(200 - (6 + 3 * 4));
   });
+
+  test("upgraded from hand: counts exactly 9 Strike cards including itself", () => {
+    let s = fight({
+      deck: [
+        ...Array(5).fill("STRIKE_RED"),
+        "POMMEL_STRIKE",
+        ...Array(3).fill({ defId: "PERFECTED_STRIKE", upgrades: 1 }),
+      ],
+    });
+    s.combat!.player.powers.push({ id: "STRENGTH", amount: 2, justApplied: false, data: null });
+
+    const perfected = Object.values(s.combat!.cards).filter((c) => c.defId === "PERFECTED_STRIKE");
+    const played = perfected[0]!;
+    s.combat!.player.piles.hand = [played.iid];
+    s.combat!.player.piles.draw = Object.values(s.combat!.cards)
+      .filter((c) => c.iid !== played.iid)
+      .map((c) => c.iid);
+    s.combat!.player.piles.discard = [];
+    s.combat!.player.piles.exhaust = [];
+    s.combat!.player.piles.limbo = [];
+
+    s = play(s, "PERFECTED_STRIKE", 0);
+    expect(monsterHp(s)).toBe(200 - 35);
+  });
 });
 
 describe("SWORD_BOOMERANG", () => {
