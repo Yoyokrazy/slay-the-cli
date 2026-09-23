@@ -82,6 +82,7 @@ function buildRelicPool(bundle: ContentBundle, character: CharacterId, tier: "co
   const color = classColor(character);
   const out: string[] = [];
   for (const r of bundle.relics.values()) {
+    if (r.unobtainable) continue;
     if (r.tier === tier && (r.pool === "shared" || r.pool === color)) out.push(r.id);
   }
   return out;

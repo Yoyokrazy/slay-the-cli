@@ -9,11 +9,11 @@
                                                           |       ||       |                                                        
                                                           '----------------'                                                        
                                                                                                                                     
-                                                         Inside: Pantograph                                                         
+                                                     Inside: Mercury Hourglass                                                      
                                                                                                                                     
                          +-[1]----------------------------------+  +-[2]----------------------------------+                         
                          | Open the chest                       |  | Take the Sapphire Key                |                         
-                         |                                      |  | Forfeits Pantograph                  |                         
+                         |                                      |  | Forfeits Mercury Hourglass           |                         
                          +--------------------------------------+  +--------------------------------------+                         
                                                                                                                                     
                                                                                                                                     

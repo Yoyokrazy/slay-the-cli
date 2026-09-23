@@ -499,6 +499,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "Discerning Monocle",
     tier: "uncommon",
     pool: "shared",
+    unobtainable: true,
     hooks: { modifyPrice: (_ctx, price) => price * 0.8 },
   },
 ];

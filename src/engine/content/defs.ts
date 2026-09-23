@@ -146,6 +146,8 @@ export interface RelicDef {
   energyBonus?: number;
   /** restrict energyBonus to elite/boss fights (Slaver's Collar) */
   energyBonusEliteBossOnly?: boolean;
+  /** present in game files but never offered in-game; kept out of every relic pool */
+  unobtainable?: boolean;
 }
 
 export interface PotionDef {

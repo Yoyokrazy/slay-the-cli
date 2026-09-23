@@ -20,6 +20,7 @@ import {
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { seedFromString } from "../../src/engine/core/rng";
 import { MAP_HEIGHT } from "../../src/engine/run/mapGen";
+import { buildBaseContentBundle } from "../../src/content/index";
 
 const bundle = makeRunTestBundle();
 const parasiteBundle = makeRunTestBundle();
@@ -178,6 +179,17 @@ describe("run initialization", () => {
   test("relic pool shuffle consumes exactly 5 relicRng longs", () => {
     const s = run("RELICRNG");
     expect(s.rng.run.relicRng.counter).toBe(5);
+  });
+
+  test("unobtainable relics never enter a relic pool", () => {
+    const real = buildBaseContentBundle();
+    const hidden = [...real.relics.values()].filter((r) => r.unobtainable).map((r) => r.id);
+    expect(hidden).toContain("DISCERNING_MONOCLE");
+    for (const character of ["IRONCLAD", "SILENT", "DEFECT", "WATCHER"] as const) {
+      const p = createRun({ seed: "NOMONOCLE", bundle: real, character }).run.pools;
+      const pooled = [...p.commonRelics, ...p.uncommonRelics, ...p.rareRelics, ...p.shopRelics, ...p.bossRelics];
+      for (const id of hidden) expect(pooled).not.toContain(id);
+    }
   });
 });
 
