@@ -10,7 +10,7 @@ import type { CharacterId, MonsterId } from "./core/ids";
 import type { CombatState } from "./combat/combatState";
 import type { RunState } from "./run/runState";
 import type { PendingChoice } from "./core/actions";
-import type { ContentBundle, EffectCtx } from "./content/defs";
+import { potionUseBlockedReason, type ContentBundle, type EffectCtx } from "./content/defs";
 import { needsEnemyTarget } from "./content/targeting";
 import { ActionQueue } from "./core/queue";
 import { RngRegistry, type RngRegistryState, type Stream } from "./core/rngRegistry";
@@ -313,14 +313,13 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
         if (!t || t.isDead || t.isEscaped) throw new Error("invalid target");
       }
       // refused, not spent: the slot keeps the potion
-      if (def.canUse && !def.canUse(ctx)) throw new Error(`${def.name} cannot be used here`);
+      const blocked = potionUseBlockedReason(def, ctx);
+      if (blocked) throw new Error(blocked);
       run.potions[cmd.slot] = null;
       let potency = def.potency;
       if (def.sacredBarkDoubles && hasRelic(run, "SACRED_BARK")) potency *= 2;
       def.onUse(ctx, cmd.target ?? null, potency);
       fireHook(ctx, PLAYER, "onUsePotion"); // Toy Ornithopter site
-      // TODO out-of-combat potions (Fruit Juice / Entropic Brew) must mutate run
-      // state directly in their defs; combat-action potions require combat.
       if (state.combat) runQueue(ctx);
       break;
     }

@@ -6,7 +6,7 @@
 import type { GameState, Command } from "../../engine/game";
 import type { RoomState, RewardEntry, ShopState } from "../../engine/run/runState";
 import type { CardInstance, CombatState } from "../../engine/combat/combatState";
-import type { CardDef, ContentBundle } from "../../engine/content/defs";
+import { potionUseBlockedReason, type CardDef, type ContentBundle } from "../../engine/content/defs";
 import { needsEnemyTarget } from "../../engine/content/targeting";
 import type { PendingChoice } from "../../engine/core/actions";
 import { getIntents, type IntentInfo, type IntentPower } from "../../engine/combat/intents";
@@ -1792,8 +1792,7 @@ function buildOverlay(g: GameState, top: Overlay, ui: UiState, focusI: number | 
         name: id ? toAscii(potionName(bundle, id)) : "(empty)",
         targeted: def?.targeted ?? false,
         text: id ? toAscii(potionText(id, sacredBark(g))) || null : null,
-        // Smoke Bomb outside a non-boss fight is refused rather than burned
-        blocked: def?.canUse && !def.canUse({ run: g.run, combat: g.combat }) ? "cannot be used here" : null,
+        blocked: def ? potionUseBlockedReason(def, { run: g.run, combat: g.combat }) : null,
       };
     }
     case "inspect": {
@@ -2445,7 +2444,7 @@ function hintFor(
       const o = view.overlay;
       if (!o) return "";
       if (o.kind === "confirmQuit") return "[y] quit  [n] keep playing";
-      if (o.kind === "potionMenu") return "[Enter/u] use  [d] discard  [Esc] cancel";
+      if (o.kind === "potionMenu") return `${o.blocked === null ? "[Enter/u] use" : "[Enter/u] use (disabled)"}  [d] discard  [Esc] cancel`;
       if (o.kind === "inspect") {
         const verb = INSPECT_CTA[o.source.of];
         const cta = verb !== undefined && (o.source.of === "hand" || o.enter !== null) ? `[Enter] ${verb}  ` : "";

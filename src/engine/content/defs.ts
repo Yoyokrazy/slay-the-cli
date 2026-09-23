@@ -156,6 +156,8 @@ export interface PotionDef {
   rarity: "common" | "uncommon" | "rare";
   class: "shared" | "red" | "green" | "blue" | "purple";
   targeted: boolean;
+  /** True only for potions the base game allows drinking from non-combat screens. */
+  usableOutOfCombat?: boolean;
   /** base potency; Sacred Bark doubles where sacredBarkDoubles */
   potency: number;
   sacredBarkDoubles: boolean;
@@ -164,6 +166,12 @@ export interface PotionDef {
    *  view can ask the same question without building a context. */
   canUse?: (ctx: { run: RunState; combat: CombatState | null }) => boolean;
   onUse: (ctx: EffectCtx, target: number | null, potency: number) => void;
+}
+
+export function potionUseBlockedReason(def: PotionDef, ctx: { run: RunState; combat: CombatState | null }): string | null {
+  if (def.canUse && !def.canUse(ctx)) return `${def.name} cannot be used here`;
+  if (!ctx.combat && !def.usableOutOfCombat) return `${def.name} cannot be used here`;
+  return null;
 }
 
 export interface MonsterMoveDef {

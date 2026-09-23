@@ -352,6 +352,33 @@ test("blocked Clash is rejected before dispatch with only the existing error toa
   expect(a.writes()).toBe(writes);
 });
 
+test("potion menu disables combat-only use outside combat but keeps discard enabled", () => {
+  const ui: UiState = { ...initialUiState(), screen: "run", overlays: [{ kind: "potionMenu", slot: 0 }] };
+
+  const blocked = createRun({ seed: "POTION-CONTROLS-BLOCKED", bundle, character: "IRONCLAD" });
+  blocked.run.room = { kind: "map" };
+  blocked.run.potions[0] = "REGEN_POTION";
+  const blockedView = buildView(blocked, ui, bundle);
+  if (blockedView.overlay?.kind !== "potionMenu") throw new Error("expected potion menu");
+  expect(blockedView.overlay.blocked).toBe("Regen Potion cannot be used here");
+  expect(mapKey({ kind: "char", ch: "u" }, blockedView)).toEqual({
+    kind: "ui",
+    act: { type: "toast", text: "Regen Potion cannot be used here" },
+  });
+  const blockedControls = liveControls(blocked, ui, blockedView);
+  expect(blockedControls.find((control) => control.key === "ENTER")?.enabled).toBe(false);
+  expect(blockedControls.find((control) => control.key === "d")?.enabled).toBe(true);
+
+  const fruit = createRun({ seed: "POTION-CONTROLS-FRUIT", bundle, character: "IRONCLAD" });
+  fruit.run.room = { kind: "map" };
+  fruit.run.potions[0] = "FRUIT_JUICE";
+  const fruitView = buildView(fruit, ui, bundle);
+  if (fruitView.overlay?.kind !== "potionMenu") throw new Error("expected potion menu");
+  expect(fruitView.overlay.blocked).toBeNull();
+  expect(mapKey({ kind: "char", ch: "u" }, fruitView)).toEqual({ kind: "cmd", cmd: { cmd: "usePotion", slot: 0 } });
+  expect(liveControls(fruit, ui, fruitView).find((control) => control.key === "ENTER")?.enabled).toBe(true);
+});
+
 test("card and enemy control IDs are encounter-scoped and use original enemy slots", () => {
   const first = combat();
   const second = combat();

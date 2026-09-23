@@ -123,6 +123,7 @@
   "rarity": "common",
   "class": "red",
   "targeted": false,
+  "usableOutOfCombat": true,
   "potency": {
    "base": 20,
    "sacredBarkDoubles": true
@@ -351,6 +352,7 @@
   "rarity": "rare",
   "class": "shared",
   "targeted": false,
+  "usableOutOfCombat": true,
   "potency": {
    "base": null,
    "sacredBarkDoubles": false
@@ -561,6 +563,7 @@
   "rarity": "rare",
   "class": "shared",
   "targeted": false,
+  "usableOutOfCombat": true,
   "potency": {
    "base": 5,
    "sacredBarkDoubles": true

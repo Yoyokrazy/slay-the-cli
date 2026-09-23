@@ -29,6 +29,7 @@ declare module "*/corpus/potions.json" {
     id: string;
     name: string;
     rarity?: string;
+    usableOutOfCombat?: boolean;
     text?: string | null;
   }
   const potions: CorpusPotionEntry[];

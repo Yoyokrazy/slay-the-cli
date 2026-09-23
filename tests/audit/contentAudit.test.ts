@@ -82,6 +82,9 @@ describe("potions vs corpus", () => {
       }
       if (def.rarity !== String(p.rarity).toLowerCase()) problems.push(`${id}.rarity: got ${def.rarity}, corpus ${p.rarity}`);
       if (def.targeted !== Boolean(p.targeted)) problems.push(`${id}.targeted: got ${def.targeted}, corpus ${p.targeted}`);
+      if (Boolean(def.usableOutOfCombat) !== Boolean(p.usableOutOfCombat)) {
+        problems.push(`${id}.usableOutOfCombat: got ${Boolean(def.usableOutOfCombat)}, corpus ${Boolean(p.usableOutOfCombat)}`);
+      }
     }
     expect(problems).toEqual([]);
   });

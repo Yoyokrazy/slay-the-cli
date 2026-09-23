@@ -198,7 +198,7 @@ export function renderOverlay(
       body = [
         // what it does, not just when it can be drunk
         ...(overlay.text !== null ? wrapPlain(overlay.text, w) : []),
-        overlay.targeted ? theme.dim("Throws at a target (needs combat).") : theme.dim("Drink at any time."),
+        overlay.targeted ? theme.dim("Throws at a target (needs combat).") : theme.dim(overlay.blocked === null ? "Drink at any time." : "Cannot drink here."),
         ...(overlay.blocked !== null ? [theme.dim(`(${overlay.blocked})`)] : []),
         "",
         `${theme.bold("[u]")} use    ${theme.bold("[d]")} discard    ${theme.bold("[Esc]")} cancel`,

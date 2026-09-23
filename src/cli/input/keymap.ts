@@ -201,6 +201,7 @@ function dispatch(key: Key, view: View): KeyAction | null {
         if (key.kind === "char" && key.ch === "d") return cmd({ cmd: "discardPotion", slot: o.slot });
         // drinking it is the point of opening this, so Enter drinks it
         if (key.kind === "enter" || key.ch === "u") {
+          if (o.blocked !== null) return ui({ type: "toast", text: o.blocked });
           if (!o.targeted) return cmd({ cmd: "usePotion", slot: o.slot });
           // targeted potions need a combat target
           if (view.screen.kind === "combat") {

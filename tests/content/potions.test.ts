@@ -298,6 +298,52 @@ describe("power potions", () => {
 });
 
 describe("resource potions", () => {
+  function outsideCombat(): GameState {
+    const s = game({});
+    s.combat = null;
+    s.run.room = { kind: "map" };
+    return s;
+  }
+
+  test("combat-only potions cannot be used outside combat and keep the slot", () => {
+    let s = outsideCombat();
+    s.run.potions[0] = "REGEN_POTION";
+    expect(() => {
+      s = advance(s, { cmd: "usePotion", slot: 0 }, B);
+    }).toThrow("Regen Potion cannot be used here");
+    expect(s.run.potions[0]).toBe("REGEN_POTION");
+  });
+
+  test("Blood Potion, Fruit Juice, and Entropic Brew work outside combat", () => {
+    let blood = outsideCombat();
+    blood.run.hp = 40;
+    blood.run.potions[0] = "BLOOD_POTION";
+    blood = advance(blood, { cmd: "usePotion", slot: 0 }, B);
+    expect(blood.run.hp).toBe(56);
+    expect(blood.run.potions[0]).toBeNull();
+
+    let fruit = outsideCombat();
+    fruit.run.hp = 40;
+    fruit.run.potions[0] = "FRUIT_JUICE";
+    fruit = advance(fruit, { cmd: "usePotion", slot: 0 }, B);
+    expect(fruit.run.maxHp).toBe(85);
+    expect(fruit.run.hp).toBe(45);
+    expect(fruit.run.potions[0]).toBeNull();
+
+    let entropic = outsideCombat();
+    entropic.run.potions = ["ENTROPIC_BREW", null, null];
+    entropic = advance(entropic, { cmd: "usePotion", slot: 0 }, B);
+    expect(entropic.run.potions.some((id) => id !== null && id !== "ENTROPIC_BREW")).toBe(true);
+  });
+
+  test("combat potion use in combat still resolves queued actions", () => {
+    let s = game({});
+    s.run.potions[0] = "ENERGY_POTION";
+    s = advance(s, { cmd: "usePotion", slot: 0 }, B);
+    expect(s.combat!.player.energy).toBe(5);
+    expect(s.run.potions[0]).toBeNull();
+  });
+
   test("Energy Potion: +2 energy", () => {
     let s = game({});
     s = usePotion(s, "ENERGY_POTION");
@@ -474,6 +520,15 @@ describe("potency plumbing", () => {
       s = usePotion(s, id);
       expect(s.pending).toBeNull();
     }
+  });
+
+  test("only real out-of-combat drinkable potions are flagged", () => {
+    expect(allPotions.filter((p) => p.usableOutOfCombat).map((p) => p.id).sort()).toEqual([
+      "BLOOD_POTION",
+      "ENTROPIC_BREW",
+      "FRUIT_JUICE",
+    ]);
+    expect(B.potions.get("FAIRY_POTION")!.usableOutOfCombat).toBeUndefined();
   });
 
   describe("Entropic Brew", () => {

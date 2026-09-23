@@ -117,6 +117,7 @@ export const allPotions: PotionDef[] = [
     rarity: "common",
     class: "red",
     targeted: false,
+    usableOutOfCombat: true,
     potency: 20,
     sacredBarkDoubles: true,
     onUse: (ctx, _t, potency) => healPlayer(ctx, Math.floor((ctx.run.maxHp * potency) / 100)),
@@ -273,6 +274,7 @@ export const allPotions: PotionDef[] = [
     rarity: "rare",
     class: "shared",
     targeted: false,
+    usableOutOfCombat: true,
     potency: 0,
     sacredBarkDoubles: false,
     onUse: (ctx) => {
@@ -383,6 +385,7 @@ export const allPotions: PotionDef[] = [
     rarity: "rare",
     class: "shared",
     targeted: false,
+    usableOutOfCombat: true,
     potency: 5,
     sacredBarkDoubles: true,
     onUse: (ctx, _t, potency) => {

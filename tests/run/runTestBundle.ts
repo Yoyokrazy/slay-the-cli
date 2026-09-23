@@ -72,6 +72,7 @@ function potion(id: string, rarity: "common" | "uncommon" | "rare"): PotionDef {
     rarity,
     class: "shared",
     targeted: false,
+    usableOutOfCombat: true,
     potency: 5,
     sacredBarkDoubles: false,
     onUse: () => {}, // inert stub
