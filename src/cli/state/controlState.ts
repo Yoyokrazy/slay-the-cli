@@ -2,7 +2,7 @@ import type { GameState } from "../../engine/game";
 import type { ContentBundle } from "../../engine/content/defs";
 import { needsEnemyTarget } from "../../engine/content/targeting";
 import { getCardCost } from "../../engine/combat/preview";
-import { buildEventView } from "../text/runlogic";
+import { buildEventView, legalMapPicks } from "../text/runlogic";
 import type { View } from "./view";
 
 /** An allowlist, never a serialization of the engine or its save envelope. */
@@ -76,8 +76,6 @@ export function publicGameState(game: GameState | null, bundle: ContentBundle, v
   const node = (n: NonNullable<NonNullable<typeof run.map>["rows"][number][number]>) => ({
     x: n.x, y: n.y, kind: n.kind, edges: [...n.edges], burningElite: n.burningElite,
   });
-  const current = run.position ? run.map?.rows[run.position[1]]?.[run.position[0]] : null;
-  const next = run.map?.rows[run.position ? run.position[1] + 1 : 0] ?? [];
   const combatView = view.screen.kind === "combat" ? view.screen : null;
   const hideIntents = run.relics.some(r => r.defId === "RUNIC_DOME");
   return {
@@ -91,7 +89,10 @@ export function publicGameState(game: GameState | null, bundle: ContentBundle, v
     outcome: game.outcome ? { kind: game.outcome.kind } : null,
     map: run.map ? {
       boss: run.map.bossId, position: run.position ? [...run.position] : null,
-      paths: next.filter(n => n !== null && (!current || current.edges.includes(n.x))).map(n => node(n!)),
+      paths: legalMapPicks(run).flatMap(p => {
+        const n = run.map?.rows[p.y]?.[p.x];
+        return n ? [node(n)] : [];
+      }),
       rows: run.map.rows.map(row => row.map(n => n ? node(n) : null)),
     } : null,
     combat: c ? {

@@ -17,7 +17,7 @@ import type {
 import type { ContentBundle, CardDef, EffectCtx } from "../../engine/content/defs";
 import type { OrbInstance, PowerInstance } from "../../engine/combat/combatState";
 import { restHealAmount } from "../../engine/run/rest";
-import { MAP_HEIGHT } from "../../engine/run/mapGen";
+export { BOSS_DOOR_Y, legalMapPicks, type MapPick } from "../../engine/run/mapTraversal";
 import { buildEventScreen } from "../../engine/run/eventRuntime";
 import { RngRegistry } from "../../engine/core/rngRegistry";
 import { ActionQueue } from "../../engine/core/queue";
@@ -247,32 +247,6 @@ export function neowDrawbackText(drawback: NeowDrawback): string {
 }
 
 // --- map -----------------------------------------------------------------------
-
-export interface MapPick {
-  x: number;
-  y: number;
-}
-
-/** y of the boss door (row above the top rest row). */
-export const BOSS_DOOR_Y = MAP_HEIGHT;
-
-/** Legal next map nodes, mirroring runFlow's mapPick validation. Only
- *  meaningful while run.room.kind === "map". */
-export function legalMapPicks(run: RunState): MapPick[] {
-  const map = run.map;
-  if (!map) return [];
-  if (run.position === null) {
-    const out: MapPick[] = [];
-    map.rows[0]?.forEach((node, x) => {
-      if (node && node.edges.length > 0) out.push({ x, y: 0 });
-    });
-    return out;
-  }
-  const [px, py] = run.position;
-  if (py >= MAP_HEIGHT - 1) return [{ x: 3, y: BOSS_DOOR_Y }];
-  const node = map.rows[py]?.[px];
-  return (node?.edges ?? []).map((ex) => ({ x: ex, y: py + 1 }));
-}
 
 const MAP_GLYPHS: Record<MapNode["kind"], string> = {
   monster: "M",

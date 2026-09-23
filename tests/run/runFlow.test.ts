@@ -19,7 +19,8 @@ import {
 } from "../../src/engine/run/neow";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { seedFromString } from "../../src/engine/core/rng";
-import { MAP_HEIGHT } from "../../src/engine/run/mapGen";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/engine/run/mapGen";
+import type { MapNode } from "../../src/engine/run/runState";
 import { buildBaseContentBundle } from "../../src/content/index";
 
 const bundle = makeRunTestBundle();
@@ -84,6 +85,23 @@ function matryoshkaCounter(s: GameState): number | undefined {
 function giveMatryoshka(s: GameState): void {
   s.run.relics.push({ defId: "MATRYOSHKA", counter: 2 });
   s.run.pools.uncommonRelics = s.run.pools.uncommonRelics.filter((id) => id !== "MATRYOSHKA");
+}
+
+function testMapNode(x: number, y: number, kind: MapNode["kind"], edges: number[] = []): MapNode {
+  return { x, y, kind, edges, burningElite: false, emeraldKey: false };
+}
+
+function wingBootsMapRun(counter: number | null): GameState {
+  const s = run("WINGMAP");
+  const rows: (MapNode | null)[][] = Array.from({ length: MAP_HEIGHT }, () => new Array<MapNode | null>(MAP_WIDTH).fill(null));
+  rows[0]![0] = testMapNode(0, 0, "monster", [0]);
+  rows[1]![0] = testMapNode(0, 1, "shop", [0]);
+  rows[1]![2] = testMapNode(2, 1, "rest", [0]);
+  s.run.map = { act: 1, rows, bossId: "HEXAGHOST", burningEliteBuff: -1 };
+  s.run.room = { kind: "map" };
+  s.run.position = [0, 0];
+  if (counter !== null) s.run.relics.push({ defId: "WING_BOOTS", counter });
+  return s;
 }
 
 function singingBowlRewardRun(): GameState {
@@ -1025,5 +1043,40 @@ describe("act transitions", () => {
     if (room.kind !== "combat") throw new Error("expected boss combat");
     expect(room.roomKind).toBe("boss");
     expect(room.encounterId).toBe(s.run.map!.bossId);
+  });
+
+  test("Wing Boots allows non-connected next-row map picks and spends one charge", () => {
+    let s = wingBootsMapRun(3);
+    s = advance(s, { cmd: "mapPick", x: 2, y: 1 }, bundle);
+    expect(s.run.position).toEqual([2, 1]);
+    expect(s.run.room?.kind).toBe("rest");
+    expect(s.run.relics.find((r) => r.defId === "WING_BOOTS")?.counter).toBe(2);
+  });
+
+  test("Wing Boots does not spend a charge on connected map picks", () => {
+    let s = wingBootsMapRun(3);
+    s = advance(s, { cmd: "mapPick", x: 0, y: 1 }, bundle);
+    expect(s.run.position).toEqual([0, 1]);
+    expect(s.run.room?.kind).toBe("shop");
+    expect(s.run.relics.find((r) => r.defId === "WING_BOOTS")?.counter).toBe(3);
+  });
+
+  test("Wing Boots preserves burning elite handling for non-connected picks", () => {
+    let s = wingBootsMapRun(3);
+    const target = s.run.map!.rows[1]![2]!;
+    target.kind = "elite";
+    target.burningElite = true;
+    s.run.pools.eliteList = ["A1_ELITE_1"];
+    s = advance(s, { cmd: "mapPick", x: 2, y: 1 }, bundle);
+    expect(s.run.room?.kind).toBe("combat");
+    if (s.run.room?.kind !== "combat") throw new Error("expected elite combat");
+    expect(s.run.room.roomKind).toBe("elite");
+    expect(s.run.room.burningElite).toBe(true);
+    expect(s.run.relics.find((r) => r.defId === "WING_BOOTS")?.counter).toBe(2);
+  });
+
+  test("non-connected map picks still reject without active Wing Boots charges", () => {
+    expect(() => advance(wingBootsMapRun(null), { cmd: "mapPick", x: 2, y: 1 }, bundle)).toThrow("no path");
+    expect(() => advance(wingBootsMapRun(0), { cmd: "mapPick", x: 2, y: 1 }, bundle)).toThrow("no path");
   });
 });

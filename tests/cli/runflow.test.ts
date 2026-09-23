@@ -8,7 +8,10 @@ import { test, expect, describe } from "bun:test";
 import { createRun, advance, type GameState } from "../../src/engine/game";
 import { buildBaseContentBundle } from "../../src/content";
 import { getIntents } from "../../src/engine/combat/intents";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/engine/run/mapGen";
+import type { MapNode } from "../../src/engine/run/runState";
 import { buildView } from "../../src/cli/state/view";
+import { publicGameState } from "../../src/cli/state/controlState";
 import { initialUiState } from "../../src/cli/state/uiState";
 import { legalCommands } from "../fuzz/helpers";
 import {
@@ -36,6 +39,23 @@ import {
 } from "../../src/cli/text/runlogic";
 
 const bundle = buildBaseContentBundle();
+
+function testMapNode(x: number, y: number, kind: MapNode["kind"], edges: number[] = []): MapNode {
+  return { x, y, kind, edges, burningElite: false, emeraldKey: false };
+}
+
+function wingBootsMapRun(counter: number | null): GameState {
+  const s = createRun({ seed: "WINGMAP", bundle, character: "IRONCLAD" });
+  const rows: (MapNode | null)[][] = Array.from({ length: MAP_HEIGHT }, () => new Array<MapNode | null>(MAP_WIDTH).fill(null));
+  rows[0]![0] = testMapNode(0, 0, "monster", [0]);
+  rows[1]![0] = testMapNode(0, 1, "shop", [0]);
+  rows[1]![2] = testMapNode(2, 1, "rest", [0]);
+  s.run.map = { act: 1, rows, bossId: "HEXAGHOST", burningEliteBuff: -1 };
+  s.run.room = { kind: "map" };
+  s.run.position = [0, 0];
+  if (counter !== null) s.run.relics.push({ defId: "WING_BOOTS", counter });
+  return s;
+}
 
 describe("pure helpers", () => {
   test("seed handling", () => {
@@ -264,5 +284,30 @@ describe("scripted run: neow -> map -> combat -> rewards -> map", () => {
     expect(picks).toEqual([{ x: 3, y: BOSS_DOOR_Y }]);
     run.position = [3, 7];
     for (const p of legalMapPicks(run)) expect(p.y).toBe(8);
+  });
+
+  test("legalMapPicks includes next-row Wing Boots picks only while charges remain", () => {
+    expect(legalMapPicks(wingBootsMapRun(3).run)).toEqual([
+      { x: 0, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    expect(legalMapPicks(wingBootsMapRun(0).run)).toEqual([{ x: 0, y: 1 }]);
+    expect(legalMapPicks(wingBootsMapRun(null).run)).toEqual([{ x: 0, y: 1 }]);
+  });
+
+  test("map view marks Wing Boots picks as selectable", () => {
+    const s = wingBootsMapRun(3);
+    const ui = { ...initialUiState(), screen: "run" as const };
+    const screen = buildView(s, ui, bundle).screen;
+    if (screen.kind !== "map") throw new Error("expected map screen");
+    expect(screen.picks.map((p) => ({ x: p.x, y: p.y, key: p.key }))).toEqual([
+      { x: 0, y: 1, key: "1" },
+      { x: 2, y: 1, key: "2" },
+    ]);
+    expect(screen.nodeRows[1]![2]!.pickKey).toBe("2");
+    expect(publicGameState(s, bundle, buildView(s, ui, bundle))?.map?.paths.map((p) => ({ x: p.x, y: p.y }))).toEqual([
+      { x: 0, y: 1 },
+      { x: 2, y: 1 },
+    ]);
   });
 });

@@ -38,6 +38,7 @@ import { applyRest, applySmith, canSmith } from "./rest";
 import { getNeowOptions, applyNeowBonus, applyNeowDrawback } from "./neow";
 import { enterEventRoom, handleEventOption, handleEventCombatVictory } from "./eventRuntime";
 import { obtainDeckCard, removeDeckCard, transformDeckCard } from "./deck";
+import { mapPickLegality, spendWingBootsCharge } from "./mapTraversal";
 
 // --- constants (audited against meta.json by tests) --------------------------------
 
@@ -712,26 +713,16 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
 
     case "mapPick": {
       if (room.kind !== "map") throw new Error("not at the map");
-      const map = run.map!;
+      const legality = mapPickLegality(run, cmd.x, cmd.y);
+      if (!legality.ok) throw new Error(legality.reason);
       let targetKind: MapNode["kind"];
       let burning = false;
-      if (cmd.y === MAP_HEIGHT) {
-        // the boss door above the top rest row
-        if (!run.position || run.position[1] !== MAP_HEIGHT - 1) throw new Error("boss is not reachable yet");
+      if (legality.target === "boss") {
         targetKind = "boss";
       } else {
-        if (cmd.x < 0 || cmd.x >= MAP_WIDTH || cmd.y < 0 || cmd.y >= MAP_HEIGHT) throw new Error("off the map");
-        const node = map.rows[cmd.y]![cmd.x];
-        if (!node) throw new Error("no room at that position");
-        if (run.position === null) {
-          if (cmd.y !== 0) throw new Error("must start on row 0");
-        } else {
-          const [px, py] = run.position;
-          if (cmd.y !== py + 1) throw new Error("can only move up one row");
-          if (!map.rows[py]![px]!.edges.includes(cmd.x)) throw new Error("no path to that room");
-        }
-        targetKind = node.kind;
-        burning = node.burningElite;
+        targetKind = legality.node.kind;
+        burning = legality.node.burningElite;
+        if (legality.winged) spendWingBootsCharge(run);
       }
       run.position = [cmd.x, cmd.y];
       // transitionToMapNode: ++floorNum then reseed floor streams with seed+floorNum
