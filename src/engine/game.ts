@@ -315,6 +315,10 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
       // refused, not spent: the slot keeps the potion
       const blocked = potionUseBlockedReason(def, ctx);
       if (blocked) throw new Error(blocked);
+      if (def.targeted && state.combat && cmd.target !== undefined) {
+        const surrounded = state.combat.player.powers.find((p) => p.id === "SURROUNDED");
+        if (surrounded) surrounded.data = { facing: cmd.target };
+      }
       run.potions[cmd.slot] = null;
       let potency = def.potency;
       if (def.sacredBarkDoubles && hasRelic(run, "SACRED_BARK")) potency *= 2;

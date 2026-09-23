@@ -91,6 +91,10 @@ function play(s: GameState, name: string, target?: number): GameState {
   return advance(s, { cmd: "playCard", handIdx: idx, target }, bundle);
 }
 
+function usePotion(s: GameState, slot: number, target: number): GameState {
+  return advance(s, { cmd: "usePotion", slot, target }, bundle);
+}
+
 const mon = (s: GameState, idx = 0) => s.combat!.monsters[idx]!;
 const monPower = (s: GameState, idx: number, id: string) => mon(s, idx).powers.find((p) => p.id === id);
 const playerPower = (s: GameState, id: string) => s.combat!.player.powers.find((p) => p.id === id);
@@ -1261,6 +1265,47 @@ describe("Spire Shield & Spear", () => {
       expect(monPower(st, 0, "STRENGTH")?.amount).toBe(2); // Piercer buffs both
       expect(monPower(st, 1, "STRENGTH")?.amount).toBe(2);
     }
+  });
+
+  test("death cleanup: killing Shield removes Surrounded and Spear Back Attack before Spear attacks", () => {
+    let s = fight(SPIRE, { deck: nukeDeck });
+    s = play(s, "T_NUKE", 0);
+    expect(mon(s, 0).isDead).toBe(true);
+    expect(playerPower(s, "SURROUNDED")).toBeUndefined();
+    expect(monPower(s, 1, "BACK_ATTACK")).toBeUndefined();
+    const hp = s.run.hp;
+    s = endTurn(s);
+    expect(hp - s.run.hp).toBe(10); // Burn Strike 5x2, not 7x2 from behind.
+  });
+
+  test("death cleanup: killing Spear removes Surrounded and Shield Back Attack before Shield attacks", () => {
+    let s: GameState | null = null;
+    for (const seed of SEEDS) {
+      const c = fight(SPIRE, { seed, deck: nukeDeck });
+      if (mon(c, 0).move === "SPIRE_SHIELD_BASH") {
+        s = c;
+        break;
+      }
+    }
+    expect(s).not.toBeNull();
+    let st = s!;
+    st = play(st, "T_NUKE", 1);
+    expect(mon(st, 1).isDead).toBe(true);
+    expect(playerPower(st, "SURROUNDED")).toBeUndefined();
+    expect(monPower(st, 0, "BACK_ATTACK")).toBeUndefined();
+    const hp = st.run.hp;
+    st = endTurn(st);
+    expect(hp - st.run.hp).toBe(12); // Bash 12, not 18 from behind.
+  });
+
+  test("targeted potions update Surrounded facing", () => {
+    let s = fight(SPIRE);
+    s.run.potions[0] = "FIRE_POTION";
+    s.run.potions[1] = "FEAR_POTION";
+    s = usePotion(s, 0, 0);
+    expect(playerPower(s, "SURROUNDED")?.data).toEqual({ facing: 0 });
+    s = usePotion(s, 1, 1);
+    expect(playerPower(s, "SURROUNDED")?.data).toEqual({ facing: 1 });
   });
 
   test("A18: Burn Strike puts 2 Burns on TOP of the draw pile; Smash block is a flat 99", () => {

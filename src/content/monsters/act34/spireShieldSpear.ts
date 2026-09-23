@@ -11,12 +11,12 @@
 // between them the two other moves are used once each in a 50/50 order
 // (aiRng.randomBoolean(), the accompanying aiRng.random(99) roll consumed but
 // ignored - the engine's rollMove provides exactly that consumption).
-// ENGINE-GAP: targeted potions do not update facing (no hook site); Smoke
-// Bomb's Surrounded restriction is a run-layer concern.
+// Smoke Bomb's Surrounded restriction is a run-layer concern.
 
 import type { MonsterDef, EffectCtx } from "../../../engine/content/defs";
 import type { MonsterState } from "../../../engine/combat/combatState";
 import { calcMonsterDamage } from "../../../engine/combat/damageCalc";
+import { removePower } from "../../../engine/combat/powerRuntime";
 import { PLAYER, monster } from "../../../engine/core/ids";
 import { firstTurn } from "../../util";
 import { attackPlayer, playerPower, prePower, selfBlock } from "../act1/_shared";
@@ -34,6 +34,19 @@ function spirePreBattle(ctx: EffectCtx, self: MonsterState): void {
   self.powers.push({ id: "STRENGTH", amount: 0, justApplied: false, data: null });
   prePower(self, "BACK_ATTACK", 1);
   prePower(self, "ARTIFACT", ctx.asc >= 18 ? 2 : 1);
+}
+
+function cleanupSurroundedOnDeath(ctx: EffectCtx): void {
+  for (const m of ctx.combat!.monsters) {
+    if ((m.id === "SPIRE_SHIELD" || m.id === "SPIRE_SPEAR") && !m.isDead && !m.isEscaped) {
+      const surrounded = ctx.combat!.player.powers.find((p) => p.id === "SURROUNDED");
+      if (surrounded) {
+        surrounded.data = { facing: m.idx };
+        removePower(ctx, PLAYER, "SURROUNDED");
+      }
+      removePower(ctx, monster(m.idx), "BACK_ATTACK");
+    }
+  }
 }
 
 /** Queue a power/block action on every living Spire elite (self included). */
@@ -56,6 +69,7 @@ export const spireShield: MonsterDef = {
       ctx.combat!.player.powers.push({ id: "SURROUNDED", amount: 1, justApplied: false, data: { facing: 1 } });
     }
   },
+  onDeath: (ctx) => cleanupSurroundedOnDeath(ctx),
   moves: {
     SPIRE_SHIELD_BASH: {
       id: BASH,
@@ -113,6 +127,7 @@ export const spireSpear: MonsterDef = {
   category: "elite",
   hp: (asc) => (asc >= 8 ? [180, 180] : [160, 160]),
   preBattle: spirePreBattle,
+  onDeath: (ctx) => cleanupSurroundedOnDeath(ctx),
   moves: {
     SPIRE_SPEAR_BURN_STRIKE: {
       id: BURN_STRIKE,

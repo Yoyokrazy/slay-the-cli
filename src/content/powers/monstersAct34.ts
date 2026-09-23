@@ -19,9 +19,8 @@
 //    the owner's turn.
 //  - BACK_ATTACK/SURROUNDED: per the corpus conflict resolution, Back Attack
 //    sits on each Spire elite and Surrounded on the player. Facing = last
-//    monster targeted by a card (stored on the SURROUNDED instance; initial
-//    facing is slot 1, the Spire Spear). ENGINE-GAP: targeted potions do not
-//    update facing (no hook site).
+//    monster targeted by a card or targeted potion (stored on the SURROUNDED
+//    instance; initial facing is slot 1, the Spire Spear).
 //  - SHARP_HIDE is owned by this workstream (The Guardian's defensive mode
 //    applies it when the bundle carries it).
 
@@ -380,7 +379,7 @@ export const act34MonsterPowers: PowerDef[] = [
   },
   {
     // Player marker in the Spire elite fight; tracks facing = the monster
-    // last targeted by a card (initially slot 1, the Spire Spear).
+    // last targeted by a card or targeted potion (initially slot 1, the Spire Spear).
     id: "SURROUNDED",
     name: "Surrounded",
     kind: "debuff",
