@@ -117,7 +117,7 @@ export type PublicGameState = ReturnType<typeof publicGameState>;
 export function controlSafeView(view: View): View {
   const safe = structuredClone(view);
   if (safe.screen.kind === "treasure" && safe.screen.list.items.some(item =>
-    item.action?.kind === "cmd" && (item.action.cmd.cmd === "openChest" || item.action.cmd.cmd === "takeSapphireKey"))) {
+    item.action?.kind === "cmd" && item.action.cmd.cmd === "openChest")) {
     safe.screen.intro = ["Chest contents are not exposed by the control bridge."];
     safe.screen.list.items.forEach(item => { item.sub = null; });
     safe.tooltip = null;

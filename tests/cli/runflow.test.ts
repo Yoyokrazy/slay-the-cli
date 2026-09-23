@@ -8,6 +8,8 @@ import { test, expect, describe } from "bun:test";
 import { createRun, advance, type GameState } from "../../src/engine/game";
 import { buildBaseContentBundle } from "../../src/content";
 import { getIntents } from "../../src/engine/combat/intents";
+import { buildView } from "../../src/cli/state/view";
+import { initialUiState } from "../../src/cli/state/uiState";
 import { legalCommands } from "../fuzz/helpers";
 import {
   PRESET_SEEDS,
@@ -121,6 +123,30 @@ describe("pure helpers", () => {
     keyed.run.keys.sapphire = true;
     expect(chestLootSummary(before, keyed, bundle)).toBe("Found: the Sapphire Key");
     expect(chestLootSummary(before, structuredClone(before), bundle)).toBe("The chest was empty.");
+  });
+
+  test("treasure view reveals linked relic only after opening", () => {
+    const s = createRun({ seed: "TREASUREVIEW", bundle, character: "IRONCLAD" });
+    s.run.room = {
+      kind: "treasure",
+      chest: { size: "small", goldPresent: false, relicTier: "common", sapphireKeyAvailable: true, opened: false },
+    };
+    s.run.pools.commonRelics = ["ANCHOR"];
+    const closed = buildView(s, { ...initialUiState(), screen: "run" }, bundle);
+    if (closed.screen.kind !== "treasure") throw new Error("expected treasure");
+    expect(closed.screen.intro.join(" ")).not.toContain("Anchor");
+    expect(closed.screen.list.items.map((item) => item.label)).toEqual(["Open the chest"]);
+
+    const opened = advance(s, { cmd: "openChest" }, bundle);
+    const openView = buildView(opened, { ...initialUiState(), screen: "run" }, bundle);
+    if (openView.screen.kind !== "treasure") throw new Error("expected treasure");
+    expect(openView.screen.intro.join(" ")).toContain("Anchor");
+    expect(openView.screen.list.items.map((item) => item.label)).toEqual(["Take Anchor", "Take the Sapphire Key", "Continue"]);
+    expect(openView.screen.list.items.map((item) => item.action?.kind === "cmd" ? item.action.cmd.cmd : null)).toEqual([
+      "takeChestRelic",
+      "takeSapphireKey",
+      "proceed",
+    ]);
   });
 });
 

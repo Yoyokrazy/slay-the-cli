@@ -381,21 +381,22 @@ describe("chests", () => {
       const { ctx } = ctxFor(`CG${i}`);
       const chest = setupTreasureRoom(ctx);
       if (!chest.goldPresent) continue;
-      const contents = openChestContents(ctx, chest, false);
+      const contents = openChestContents(ctx, chest);
       const base = CHESTS.goldBaseAmount[chest.size];
       expect(contents.gold).toBeGreaterThanOrEqual(Math.round(base * 0.9));
       expect(contents.gold).toBeLessThanOrEqual(Math.round(base * 1.1));
     }
   });
 
-  test("sapphire key replaces the relic (relic still consumed from the pool)", () => {
+  test("sapphire key choice reveals the relic and consumes it from the pool", () => {
     const { s, ctx } = ctxFor("KEY");
     const chest = setupTreasureRoom(ctx);
     const poolSizeBefore =
       s.run.pools.commonRelics.length + s.run.pools.uncommonRelics.length + s.run.pools.rareRelics.length;
-    const contents = openChestContents(ctx, chest, true);
-    expect(contents.sapphireKeyTaken).toBe(true);
-    expect(contents.relicId).toBeNull();
+    const contents = openChestContents(ctx, chest);
+    expect(contents.pendingChoice).toBe(true);
+    expect(contents.relicId).not.toBeNull();
+    expect(chest.pendingRelicId).toBe(contents.relicId);
     const poolSizeAfter =
       s.run.pools.commonRelics.length + s.run.pools.uncommonRelics.length + s.run.pools.rareRelics.length;
     expect(poolSizeAfter).toBe(poolSizeBefore - 1);

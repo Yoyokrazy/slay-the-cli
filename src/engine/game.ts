@@ -51,6 +51,7 @@ export type RunCommand =
   | { cmd: "shopRemove"; deckIdx: number }
   | { cmd: "restOption"; kind: "rest" | "smith" | "recall" | "lift" | "toke" | "dig"; deckIdx?: number }
   | { cmd: "openChest" }
+  | { cmd: "takeChestRelic" }
   | { cmd: "takeSapphireKey" }
   | { cmd: "eventOption"; i: number }
   | { cmd: "proceed" };
@@ -337,6 +338,7 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
     case "shopRemove":
     case "restOption":
     case "openChest":
+    case "takeChestRelic":
     case "takeSapphireKey":
     case "eventOption":
     case "proceed":

@@ -142,6 +142,8 @@ export interface ChestState {
   relicTier: CardRarityRoll; // chest relic tiers are common/uncommon/rare
   sapphireKeyAvailable: boolean;
   opened: boolean;
+  /** set after opening a sapphire-key-eligible chest until relic/key/skip is chosen */
+  pendingRelicId?: RelicId | null;
 }
 
 export type RewardsSource = "monster" | "elite" | "boss" | "neow" | "event" | "relic";

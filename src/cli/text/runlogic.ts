@@ -477,7 +477,7 @@ export function chestTitle(size: ChestSize): string {
   return `${titleCase(size)} Chest`;
 }
 
-/** Human summary of what an openChest/takeSapphireKey advance produced,
+/** Human summary of what an openChest/takeChestRelic/takeSapphireKey advance produced,
  *  computed as a before/after diff of run state. */
 export function chestLootSummary(before: GameState, after: GameState, bundle: ContentBundle): string {
   const parts: string[] = [];

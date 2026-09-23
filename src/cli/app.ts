@@ -158,7 +158,7 @@ export function runApp(deps: AppDeps): Promise<AppResult> {
       // closes them (the web UI closed its menus before advancing too)
       ui = { ...ui, choiceSel: [], choicePage: 0, overlays: [] };
       absorbEvents(next.eventLog, prev);
-      if (cmd.cmd === "openChest" || cmd.cmd === "takeSapphireKey") {
+      if (cmd.cmd === "openChest" || cmd.cmd === "takeChestRelic" || cmd.cmd === "takeSapphireKey") {
         ui = { ...ui, lastLoot: chestLootSummary(prev, next, bundle) };
       } else if (cmd.cmd === "proceed" || cmd.cmd === "mapPick") {
         ui = { ...ui, lastLoot: null };

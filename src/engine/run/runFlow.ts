@@ -33,7 +33,7 @@ import {
   obtainRelicFromPool,
 } from "./rewards";
 import { generateShop, repriceAfterRelic } from "./shop";
-import { setupTreasureRoom, openChestContents } from "./treasure";
+import { setupTreasureRoom, openChestContents, claimChestRelic, claimChestSapphireKey } from "./treasure";
 import { applyRest, applySmith, canSmith } from "./rest";
 import { getNeowOptions, applyNeowBonus, applyNeowDrawback } from "./neow";
 import { enterEventRoom, handleEventOption, handleEventCombatVictory } from "./eventRuntime";
@@ -893,18 +893,29 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
       break;
     }
 
-    case "openChest":
-    case "takeSapphireKey": {
+    case "openChest": {
       if (room.kind !== "treasure") throw new Error("not in a treasure room");
-      const contents = openChestContents(ctx, room.chest, cmd.cmd === "takeSapphireKey");
+      const contents = openChestContents(ctx, room.chest);
       const extraRelics: RelicId[] = [];
       fireHook(ctx, PLAYER, "onChestOpen", false, extraRelics);
       if (contents.gold > 0) gainGold(ctx, contents.gold);
-      if (contents.sapphireKeyTaken) run.keys.sapphire = true;
-      else if (contents.relicId) addRelic(ctx, contents.relicId);
+      if (!contents.pendingChoice && contents.relicId) addRelic(ctx, contents.relicId);
       // Sapphire Key replaces only the chest's main relic; Matryoshka extras
       // still ride the same auto-grant path as ordinary chest relics here.
       for (const id of extraRelics) addRelic(ctx, id);
+      break;
+    }
+
+    case "takeChestRelic": {
+      if (room.kind !== "treasure") throw new Error("not in a treasure room");
+      addRelic(ctx, claimChestRelic(room.chest));
+      break;
+    }
+
+    case "takeSapphireKey": {
+      if (room.kind !== "treasure") throw new Error("not in a treasure room");
+      claimChestSapphireKey(room.chest);
+      run.keys.sapphire = true;
       break;
     }
 

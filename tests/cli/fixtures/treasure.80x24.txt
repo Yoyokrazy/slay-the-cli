@@ -1,19 +1,19 @@
  HP 51/80 | G 64 | F9 A1 | ASC0 | K:--- | POT --- | DECK 9 | REL 3 | Ironclad | 
 -- SMALL CHEST -----------------------------------------------------------------
                                                                                 
-  Inside: Mercury Hourglass                                                     
                                                                                 
-  [1] Open the chest                                                            
-  [2] Take the Sapphire Key                                                     
-        Forfeits Mercury Hourglass                                              
+                                 .-~~~~~~~~~~~~-.                               
+                                /________________\                              
+                                |                |                              
+                                |======[__]======|                              
+                                |       ||       |                              
+                                '----------------'                              
                                                                                 
+                          A chest waits to be opened.                           
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
+                    +-[1]----------------------------------+                    
+                    | Open the chest                       |                    
+                    +--------------------------------------+                    
                                                                                 
                                                                                 
                                                                                 

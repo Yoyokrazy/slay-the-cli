@@ -72,7 +72,8 @@ function curseCount(s: GameState): number {
 function openMatryoshkaChest(s: GameState): { state: GameState; gained: number } {
   putTreasureRoom(s);
   const before = s.run.relics.length;
-  const state = advance(s, { cmd: "openChest" }, matryoshkaBundle);
+  let state = advance(s, { cmd: "openChest" }, matryoshkaBundle);
+  state = advance(state, { cmd: "takeChestRelic" }, matryoshkaBundle);
   return { state, gained: state.run.relics.length - before };
 }
 
@@ -697,22 +698,81 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
     expect(() => advance(s2, { cmd: "restOption", kind: "smith", deckIdx: 0 }, bundle)).toThrow("cannot be upgraded");
   });
 
-  test("treasure: openChest awards gold+relic; takeSapphireKey takes the key instead", () => {
+  test("treasure: openChest reveals relic before linked sapphire-key choice", () => {
     let s = forceRoom("CHESTO", (ctx) => {
+      ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
+    });
+    const room = s.run.room;
+    if (room?.kind !== "treasure") throw new Error("expected treasure");
+    const expectedRelic = room.chest.relicTier === "common"
+      ? s.run.pools.commonRelics[0]!
+      : room.chest.relicTier === "uncommon"
+        ? s.run.pools.uncommonRelics[0]!
+        : s.run.pools.rareRelics[0]!;
+    const relicsBefore = s.run.relics.length;
+    s = advance(s, { cmd: "openChest" }, bundle);
+    expect(s.run.relics.length).toBe(relicsBefore);
+    expect(s.run.room?.kind).toBe("treasure");
+    if (s.run.room?.kind !== "treasure") throw new Error("expected treasure");
+    expect(s.run.room.chest.pendingRelicId).toBe(expectedRelic);
+    expect(() => advance(s, { cmd: "openChest" }, bundle)).toThrow("already opened");
+  });
+
+  test("treasure: choosing sapphire key forfeits revealed relic", () => {
+    let s = forceRoom("CHESTK", (ctx) => {
+      ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
+    });
+    const relicsBefore = s.run.relics.length;
+    s = advance(s, { cmd: "openChest" }, bundle);
+    s = advance(s, { cmd: "takeSapphireKey" }, bundle);
+    expect(s.run.keys.sapphire).toBe(true);
+    expect(s.run.relics.length).toBe(relicsBefore);
+    expect(() => advance(s, { cmd: "takeChestRelic" }, bundle)).toThrow("already claimed");
+  });
+
+  test("treasure: choosing relic leaves sapphire key available for later chests", () => {
+    let s = forceRoom("CHESTR", (ctx) => {
+      ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
+    });
+    const relicsBefore = s.run.relics.length;
+    s = advance(s, { cmd: "openChest" }, bundle);
+    s = advance(s, { cmd: "takeChestRelic" }, bundle);
+    expect(s.run.keys.sapphire).toBe(false);
+    expect(s.run.relics.length).toBe(relicsBefore + 1);
+    expect(() => advance(s, { cmd: "takeSapphireKey" }, bundle)).toThrow("already claimed");
+
+    const { ctx, saveRng } = makeTestCtx(s, bundle);
+    ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
+    saveRng();
+    if (s.run.room?.kind !== "treasure") throw new Error("expected treasure");
+    expect(s.run.room.chest.sapphireKeyAvailable).toBe(true);
+  });
+
+  test("treasure: no-key-available open still grants relic immediately", () => {
+    let s = forceRoom("CHESTNOKEY", (ctx) => {
+      ctx.run.keys.sapphire = true;
       ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
     });
     const relicsBefore = s.run.relics.length;
     s = advance(s, { cmd: "openChest" }, bundle);
     expect(s.run.relics.length).toBe(relicsBefore + 1);
-    expect(() => advance(s, { cmd: "openChest" }, bundle)).toThrow("already opened");
+    if (s.run.room?.kind !== "treasure") throw new Error("expected treasure");
+    expect(s.run.room.chest.pendingRelicId).toBeNull();
+  });
 
-    let s2 = forceRoom("CHESTK", (ctx) => {
+  test("treasure: sapphire choice does not change the chest relic roll", () => {
+    let choice = forceRoom("CHESTRNG", (ctx) => {
       ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
     });
-    const relicsBefore2 = s2.run.relics.length;
-    s2 = advance(s2, { cmd: "takeSapphireKey" }, bundle);
-    expect(s2.run.keys.sapphire).toBe(true);
-    expect(s2.run.relics.length).toBe(relicsBefore2);
+    let immediate = forceRoom("CHESTRNG", (ctx) => {
+      ctx.run.keys.sapphire = true;
+      ctx.run.room = { kind: "treasure", chest: setupTreasureRoom(ctx) };
+    });
+    choice = advance(choice, { cmd: "openChest" }, bundle);
+    immediate = advance(immediate, { cmd: "openChest" }, bundle);
+    if (choice.run.room?.kind !== "treasure") throw new Error("expected treasure");
+    const granted = immediate.run.relics[immediate.run.relics.length - 1]!.defId;
+    expect(choice.run.room.chest.pendingRelicId).toBe(granted);
   });
 
   test("shop: buy card/relic/potion, gold checks, removal escalation across visits", () => {
@@ -815,6 +875,7 @@ describe("Cursed Key", () => {
     s.run.relics.push({ defId: "CURSED_KEY", counter: 0 });
     putTreasureRoom(s);
 
+    s = advance(s, { cmd: "openChest" }, cursedKeyBundle);
     s = advance(s, { cmd: "takeSapphireKey" }, cursedKeyBundle);
 
     expect(s.run.keys.sapphire).toBe(true);
@@ -854,6 +915,7 @@ describe("Cursed Key", () => {
     putTreasureRoom(s);
 
     s = advance(s, { cmd: "openChest" }, cursedKeyBundle);
+    s = advance(s, { cmd: "takeChestRelic" }, cursedKeyBundle);
 
     expect(curseCount(s)).toBe(1);
     expect(s.run.relics.find((r) => r.defId === "OMAMORI")?.counter).toBe(2);
@@ -887,6 +949,7 @@ describe("Matryoshka", () => {
     putTreasureRoom(s);
     const before = s.run.relics.length;
 
+    s = advance(s, { cmd: "openChest" }, matryoshkaBundle);
     s = advance(s, { cmd: "takeSapphireKey" }, matryoshkaBundle);
 
     expect(s.run.keys.sapphire).toBe(true);

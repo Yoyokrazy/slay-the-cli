@@ -59,8 +59,8 @@ export const bossRelics: RelicDef[] = [
     hooks: {
       onChestOpen: (ctx, isBossChest) => {
         if (isBossChest) return;
-        // Sapphire Key is chosen after the chest opens in StS; runFlow fires
-        // this hook for both openChest and takeSapphireKey.
+        // Sapphire Key is chosen after the chest opens in StS; the curse is
+        // added when the chest opens, before the linked reward is claimed.
         const curse = randomCurse(ctx);
         if (!curse) return;
         const before = ctx.run.deck.length;

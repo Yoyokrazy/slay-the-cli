@@ -10,7 +10,6 @@ import type { CardDef, ContentBundle } from "../../engine/content/defs";
 import { needsEnemyTarget } from "../../engine/content/targeting";
 import type { PendingChoice } from "../../engine/core/actions";
 import { getIntents, type IntentInfo, type IntentPower } from "../../engine/combat/intents";
-import { peekRelicFromPool } from "../../engine/run/rewards";
 import { getCardCost, getCardPlayability, getCardPreviews, previewCardAt, type CardPreview } from "../../engine/combat/preview";
 import {
   titleCase,
@@ -1280,22 +1279,21 @@ function buildTreasure(
   bundle: ContentBundle,
 ): SimpleListScreen {
   const chest = room.chest;
-  // The relic is decided at setup (the pools are shuffled at run start), so the
-  // chest can show what is in it before you trade it for the key. DEVIATION:
-  // the real game reveals on opening, one click later; the information is the
-  // same, and choosing the key blind was worse.
-  const relic = chest.opened ? null : toAscii(relicName(bundle, peekRelicFromPool(g.run, chest.relicTier)));
-  const intro = [chest.opened ? (ui.lastLoot ?? "Chest opened.") : `Inside: ${relic}`];
+  const pendingRelic = chest.opened && chest.pendingRelicId ? toAscii(relicName(bundle, chest.pendingRelicId)) : null;
+  const intro = pendingRelic
+    ? [`Inside: ${pendingRelic}`, ui.lastLoot ?? null].filter((line): line is string => line !== null)
+    : [chest.opened ? (ui.lastLoot ?? "Chest opened.") : "A chest waits to be opened."];
   const items: RawItem[] = [];
   if (!chest.opened) {
     items.push({ label: "Open the chest", action: cmd({ cmd: "openChest" }) });
-    if (chest.sapphireKeyAvailable) {
-      items.push({
-        label: "Take the Sapphire Key",
-        sub: `Forfeits ${relic}`,
-        action: cmd({ cmd: "takeSapphireKey" }),
-      });
-    }
+  } else if (pendingRelic) {
+    items.push({ label: `Take ${pendingRelic}`, action: cmd({ cmd: "takeChestRelic" }) });
+    items.push({
+      label: "Take the Sapphire Key",
+      sub: `Forfeits ${pendingRelic}`,
+      action: cmd({ cmd: "takeSapphireKey" }),
+    });
+    items.push({ label: "Continue", action: cmd({ cmd: "proceed" }) });
   } else {
     items.push({ label: "Continue", action: cmd({ cmd: "proceed" }) });
   }

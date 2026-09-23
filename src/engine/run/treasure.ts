@@ -40,15 +40,16 @@ export function setupTreasureRoom(ctx: EffectCtx): ChestState {
 
 export interface ChestContents {
   gold: number;
-  relicId: RelicId | null; // null when the sapphire key was taken instead
-  sapphireKeyTaken: boolean;
+  relicId: RelicId | null;
+  pendingChoice: boolean;
 }
 
 /** openTreasureRoomChest: gold amount = round(random(base*0.9, base*1.1)),
- *  then the relic (or the sapphire key INSTEAD of the relic).
+ *  then the relic is determined and either granted immediately or left pending
+ *  as the Sapphire Key's linked alternative.
  *  TODO relic content hooks: NLOTHS_HUNGRY_FACE. Matryoshka is handled by
  *  onChestOpen in runFlow after the chest's main relic is determined. */
-export function openChestContents(ctx: EffectCtx, chest: ChestState, takeSapphireKey: boolean): ChestContents {
+export function openChestContents(ctx: EffectCtx, chest: ChestState): ChestContents {
   if (chest.opened) throw new Error("chest already opened");
   chest.opened = true;
   let gold = 0;
@@ -58,9 +59,25 @@ export function openChestContents(ctx: EffectCtx, chest: ChestState, takeSapphir
   }
   // the relic identity is determined (shown) either way; taking the key forfeits it
   const relicId = obtainRelicFromPool(ctx.run, chest.relicTier);
-  if (takeSapphireKey) {
-    if (!chest.sapphireKeyAvailable) throw new Error("sapphire key not available");
-    return { gold, relicId: null, sapphireKeyTaken: true };
+  if (chest.sapphireKeyAvailable) {
+    chest.pendingRelicId = relicId;
+    return { gold, relicId, pendingChoice: true };
   }
-  return { gold, relicId, sapphireKeyTaken: false };
+  chest.pendingRelicId = null;
+  return { gold, relicId, pendingChoice: false };
+}
+
+export function claimChestRelic(chest: ChestState): RelicId {
+  if (!chest.opened) throw new Error("chest not opened");
+  if (!chest.pendingRelicId) throw new Error("chest reward already claimed");
+  const relicId = chest.pendingRelicId;
+  chest.pendingRelicId = null;
+  return relicId;
+}
+
+export function claimChestSapphireKey(chest: ChestState): void {
+  if (!chest.opened) throw new Error("chest not opened");
+  if (!chest.sapphireKeyAvailable) throw new Error("sapphire key not available");
+  if (!chest.pendingRelicId) throw new Error("chest reward already claimed");
+  chest.pendingRelicId = null;
 }
