@@ -5,6 +5,8 @@ import type { Stream } from "../../src/engine/core/rngRegistry";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { ActionQueue } from "../../src/engine/core/queue";
 import { PLAYER } from "../../src/engine/core/ids";
+import { runQueue } from "../../src/engine/combat/interpreter";
+import { previewCardAt } from "../../src/engine/combat/preview";
 import { makeTestBundle } from "../helpers/testBundle";
 import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
@@ -29,6 +31,11 @@ const extraCards: CardDef[] = [
     id: "T_POWER", name: "T Power", color: "red", type: "power", rarity: "common", cost: 1, target: "self",
     values: { magic: 1 }, upgradeValues: { magic: 2 }, keywords: [],
     primitives: [{ do: "applyPower", power: "STRENGTH", n: "magic", target: "self" }],
+  },
+  {
+    id: "T_AOE_MULTI", name: "T AoE Multi", color: "red", type: "attack", rarity: "common", cost: 0, target: "allenemy",
+    values: { damage: 3, hits: 2 }, upgradeValues: {}, keywords: [],
+    primitives: [{ do: "damageAll", n: "damage", hits: "hits" }],
   },
   {
     id: "T_COLORLESS", name: "T Colorless", color: "colorless", type: "skill", rarity: "uncommon", cost: 1, target: "self",
@@ -110,6 +117,13 @@ const relicCounter = (s: GameState, id: string) => s.run.relics.find((r) => r.de
 const setRelicCounter = (s: GameState, id: string, n: number) => {
   s.run.relics.find((r) => r.defId === id)!.counter = n;
 };
+const monsterHp = (s: GameState, idx = 0) => s.combat!.monsters[idx]!.hp;
+const previewByName = (s: GameState, name: string, target = 0) => {
+  const handIdx = handNames(s).indexOf(name);
+  if (handIdx === -1) throw new Error(`${name} not in hand: ${handNames(s)}`);
+  const iid = s.combat!.player.piles.hand[handIdx]!;
+  return previewCardAt(s, B, iid, target);
+};
 
 /** Create games with seed prefix until predicate holds on the fresh game (intent fishing). */
 function gameWhere(
@@ -148,6 +162,19 @@ function makeCtx(s: GameState) {
 
 const jabs = (n: number) => Array(n).fill({ defId: "T_JAB" });
 const strikes = (n: number) => Array(n).fill({ defId: "T_STRIKE" });
+
+function triggerPenNibBattleStart(s: GameState): GameState {
+  const ctx = makeCtx(s);
+  const relic = s.run.relics.find((r) => r.defId === "PEN_NIB")!;
+  const def = B.relics.get("PEN_NIB")!;
+  def.hooks.atBattleStart?.({
+    ...ctx,
+    owner: PLAYER,
+    relicCounter: { get: () => relic.counter, set: (n: number) => (relic.counter = n) },
+  });
+  runQueue(ctx);
+  return s;
+}
 const defends = (n: number) => Array(n).fill({ defId: "T_DEFEND" });
 
 // ---------------------------------------------------------------------------
@@ -464,17 +491,94 @@ describe("attack/skill pity counters", () => {
     expect(relicCounter(s, "NUNCHAKU")).toBe(0);
   });
 
-  test("Pen Nib: exactly the 10th attack is doubled", () => {
-    let s = game({ deck: strikes(12), relics: ["PEN_NIB"] });
-    setRelicCounter(s, "PEN_NIB", 9);
+  test("Pen Nib: exactly the 10th attack is doubled and counter wraps", () => {
+    let s = gameWhere(
+      { deck: [{ defId: "T_JAB" }, ...strikes(11)], relics: ["PEN_NIB"] },
+      (state) => handNames(state).includes("T_JAB") && handNames(state).includes("T_STRIKE"),
+    );
+    setRelicCounter(s, "PEN_NIB", 8);
+    s = play(s, "T_JAB", 0);
+    expect(relicCounter(s, "PEN_NIB")).toBe(9);
+    expect(power(s, "PEN_NIB")?.amount).toBe(1);
+    expect(previewByName(s, "T_STRIKE")?.damage).toBe(12);
     const hp0 = s.combat!.monsters[0]!.hp;
     s = play(s, "T_STRIKE", 0);
     expect(s.combat!.monsters[0]!.hp).toBe(hp0 - 12);
     expect(relicCounter(s, "PEN_NIB")).toBe(0);
+    expect(power(s, "PEN_NIB")).toBeUndefined();
     const hp1 = s.combat!.monsters[0]!.hp;
     s = play(s, "T_STRIKE", 0);
     expect(s.combat!.monsters[0]!.hp).toBe(hp1 - 6); // back to normal
     expect(relicCounter(s, "PEN_NIB")).toBe(1);
+  });
+
+  test("Pen Nib: doubles after Strength and target Vulnerable", () => {
+    let s = gameWhere(
+      { deck: [{ defId: "T_JAB" }, ...strikes(11)], relics: ["PEN_NIB"], monsters: ["T_BOSS"] },
+      (state) => handNames(state).includes("T_JAB") && handNames(state).includes("T_STRIKE"),
+    );
+    s.combat!.player.powers.push({ id: "STRENGTH", amount: 5, justApplied: false, data: null });
+    s.combat!.monsters[0]!.powers.push({ id: "VULNERABLE", amount: 1, justApplied: false, data: null });
+    setRelicCounter(s, "PEN_NIB", 8);
+    s = play(s, "T_JAB", 0);
+    expect(previewByName(s, "T_STRIKE")?.damage).toBe(33);
+    const hp0 = monsterHp(s);
+    s = play(s, "T_STRIKE", 0);
+    expect(monsterHp(s)).toBe(hp0 - 33);
+  });
+
+  test("Pen Nib: Strength gained after arming still folds before the double", () => {
+    let s = gameWhere(
+      { deck: [{ defId: "T_JAB" }, { defId: "T_POWER" }, ...strikes(10)], relics: ["PEN_NIB"], monsters: ["T_BOSS"] },
+      (state) =>
+        handNames(state).includes("T_JAB") &&
+        handNames(state).includes("T_POWER") &&
+        handNames(state).includes("T_STRIKE"),
+    );
+    setRelicCounter(s, "PEN_NIB", 8);
+    s = play(s, "T_JAB", 0);
+    s = play(s, "T_POWER");
+    expect(power(s, "STRENGTH")?.amount).toBe(1);
+    expect(power(s, "PEN_NIB")?.amount).toBe(1);
+    expect(s.combat!.player.powers.map((p) => p.id)).toEqual(["STRENGTH", "PEN_NIB"]);
+    expect(previewByName(s, "T_STRIKE")?.damage).toBe(14);
+    const hp0 = monsterHp(s);
+    s = play(s, "T_STRIKE", 0);
+    expect(monsterHp(s)).toBe(hp0 - 14);
+  });
+
+  test("Pen Nib: doubles every hit against every target", () => {
+    let s = gameWhere(
+      {
+        deck: [{ defId: "T_JAB" }, { defId: "T_AOE_MULTI" }, ...jabs(10)],
+        relics: ["PEN_NIB"],
+        monsters: ["T_BOSS", "T_BOSS"],
+      },
+      (state) => handNames(state).includes("T_JAB") && handNames(state).includes("T_AOE_MULTI"),
+    );
+    setRelicCounter(s, "PEN_NIB", 8);
+    s = play(s, "T_JAB", 0);
+    expect(previewByName(s, "T_AOE_MULTI")).toMatchObject({ damage: 6, hits: 2 });
+    const hp0 = s.combat!.monsters.map((m) => m.hp);
+    s = play(s, "T_AOE_MULTI");
+    expect(s.combat!.monsters.map((m) => m.hp)).toEqual([hp0[0]! - 12, hp0[1]! - 12]);
+    expect(relicCounter(s, "PEN_NIB")).toBe(0);
+  });
+
+  test("Pen Nib: combat start re-arms when persistent counter is 9", () => {
+    let s = gameWhere(
+      { deck: strikes(12), relics: ["PEN_NIB"], monsters: ["T_BOSS"] },
+      (state) => handNames(state).includes("T_STRIKE"),
+    );
+    setRelicCounter(s, "PEN_NIB", 9);
+    s = triggerPenNibBattleStart(s);
+    expect(power(s, "PEN_NIB")?.amount).toBe(1);
+    expect(previewByName(s, "T_STRIKE")?.damage).toBe(12);
+    const hp0 = monsterHp(s);
+    s = play(s, "T_STRIKE", 0);
+    expect(monsterHp(s)).toBe(hp0 - 12);
+    expect(relicCounter(s, "PEN_NIB")).toBe(0);
+    expect(power(s, "PEN_NIB")).toBeUndefined();
   });
 
   test("Ink Bottle: draws 1 on every 10th card", () => {

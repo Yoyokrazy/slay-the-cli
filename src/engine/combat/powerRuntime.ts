@@ -26,6 +26,14 @@ export function getPowerAmount(ctx: EffectCtx, actor: ActorRef, powerId: string)
   return getPower(ctx, actor, powerId)?.amount ?? 0;
 }
 
+function powerPriority(ctx: EffectCtx, powerId: string): number {
+  return ctx.bundle.powers.get(powerId)?.priority ?? 5;
+}
+
+function sortPowers(ctx: EffectCtx, powers: PowerInstance[]): void {
+  powers.sort((a, b) => powerPriority(ctx, a.id) - powerPriority(ctx, b.id));
+}
+
 export function applyPower(
   ctx: EffectCtx,
   source: ActorRef | null,
@@ -71,6 +79,7 @@ export function applyPower(
     // "none": no restack
   } else {
     powers.push({ id: powerId, amount, justApplied, data: null });
+    sortPowers(ctx, powers);
     def.onApply?.(ctx, target, amount);
   }
   // source-side notification AFTER a successful application (Champion Belt)

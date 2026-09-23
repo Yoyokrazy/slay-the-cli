@@ -4,8 +4,27 @@
 // definitions are corpus-identical, so map-merge by id is safe.
 
 import type { PowerDef } from "../../engine/content/defs";
+import { f32mul } from "../../engine/core/math";
 
 export const relicSupportPowers: PowerDef[] = [
+  {
+    // Real-game PenNibPower: priority 6, so it folds after priority-5 powers
+    // like Strength and Vigor, and removes itself when that Attack is used.
+    id: "PEN_NIB",
+    name: "Pen Nib",
+    kind: "buff",
+    stacking: "none",
+    turnBased: false,
+    priority: 6,
+    hooks: {
+      atDamageGive: (_ctx, d) => f32mul(d, 2),
+      onUseCard: (ctx, card) => {
+        if (ctx.bundle.cards.get(card.defId)?.type === "attack") {
+          ctx.queue.addToBottom({ kind: "removePower", target: ctx.owner, powerId: "PEN_NIB" });
+        }
+      },
+    },
+  },
   {
     // "Gain X Block next turn." (Self-Forming Clay)
     id: "NEXT_TURN_BLOCK",

@@ -299,20 +299,34 @@ export const commonRelics: RelicDef[] = [
   },
   {
     // "Every 10th Attack you play deals double damage." Persistent counter 0-9;
-    // damage doubles while counter==9 (the 10th attack), then resets on use.
+    // counter==9 arms Pen Nib Power for the next attack, then resets on use.
     id: "PEN_NIB",
     name: "Pen Nib",
     tier: "common",
     pool: "shared",
     hooks: {
-      atDamageGive: (ctx, d, _type, card) => {
-        if (card && cnt(ctx).get() === 9 && ctx.bundle.cards.get(card.defId)?.type === "attack") return d * 2;
-        return d;
+      atBattleStart: (ctx) => {
+        if (cnt(ctx).get() === 9) {
+          ctx.queue.addToBottom({ kind: "applyPower", source: PLAYER, target: PLAYER, powerId: "PEN_NIB", amount: 1 });
+        }
       },
       onUseCard: (ctx, card) => {
         if (ctx.bundle.cards.get(card.defId)?.type !== "attack") return;
         const c = cnt(ctx).get() + 1;
-        cnt(ctx).set(c >= 10 ? 0 : c);
+        if (c >= 10) {
+          cnt(ctx).set(0);
+        } else {
+          cnt(ctx).set(c);
+          if (c === 9) {
+            ctx.queue.addToBottom({
+              kind: "applyPower",
+              source: PLAYER,
+              target: PLAYER,
+              powerId: "PEN_NIB",
+              amount: 1,
+            });
+          }
+        }
       },
     },
   },
