@@ -47,6 +47,10 @@ const mawBundle = makeRunTestBundle();
 const mawDef = allRelics.find((r) => r.id === "MAW_BANK");
 if (!mawDef) throw new Error("missing MAW_BANK relic");
 mawBundle.relics.set(mawDef.id, mawDef);
+const pillowBundle = makeRunTestBundle();
+const pillowDef = allRelics.find((r) => r.id === "REGAL_PILLOW");
+if (!pillowDef) throw new Error("missing REGAL_PILLOW relic");
+pillowBundle.relics.set(pillowDef.id, pillowDef);
 
 const run = (seed: string, ascension = 0): GameState => createRun({ seed, bundle, character: "IRONCLAD", ascension });
 const eggRun = (seed: string): GameState => createRun({ seed, bundle: eggBundle, character: "IRONCLAD" });
@@ -592,6 +596,16 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
     expect(() => advance(s, { cmd: "restOption", kind: "rest" }, bundle)).toThrow("already used");
     s = advance(s, { cmd: "proceed" }, bundle);
     expect(s.run.room!.kind).toBe("map");
+  });
+
+  test("Regal Pillow adds exactly 15 HP to one Rest", () => {
+    let s = createRun({ seed: "PILLOW", bundle: pillowBundle, character: "IRONCLAD" });
+    s.run.relics.push({ defId: "REGAL_PILLOW", counter: 0 });
+    s.run.room = { kind: "rest", used: false };
+    s.run.hp = 10;
+    const expected = 10 + restHealAmount(s.run.maxHp) + 15;
+    s = advance(s, { cmd: "restOption", kind: "rest" }, pillowBundle);
+    expect(s.run.hp).toBe(expected);
   });
 
   // Issue #7: the option list was hardcoded, so five relics that change what a

@@ -343,7 +343,7 @@ export const commonRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Whenever you Rest, heal an additional 15 HP." RUN-LAYER: onRest not fired yet.
+    // "Whenever you Rest, heal an additional 15 HP." onRest fires once from applyRest.
     id: "REGAL_PILLOW",
     name: "Regal Pillow",
     tier: "common",

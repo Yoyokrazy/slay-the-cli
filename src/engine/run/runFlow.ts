@@ -852,8 +852,8 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
       if (room.used) throw new Error("rest site already used");
       if (!restOptionAvailable(ctx, cmd.kind)) throw new Error(`${cmd.kind} is not available here`);
       if (cmd.kind === "rest") {
+        // applyRest fires onRest itself
         applyRest(ctx);
-        fireHook(ctx, PLAYER, "onRest");
       } else if (cmd.kind === "recall") {
         // Recall: take the ruby key instead of resting (once per run)
         run.keys.ruby = true;
