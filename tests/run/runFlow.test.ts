@@ -639,6 +639,87 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
     expect(s.run.hp).toBe(expected);
   });
 
+  describe("Dream Catcher", () => {
+    function atDreamCatcherRest(seed: string): GameState {
+      const s = forceRoom(seed, (ctx) => {
+        ctx.run.room = { kind: "rest", used: false };
+      });
+      s.run.relics.push({ defId: "DREAM_CATCHER", counter: 0 });
+      return s;
+    }
+
+    test("rest offers a skippable card reward", () => {
+      const before = atDreamCatcherRest("DREAM_SKIP");
+      const out = advance(before, { cmd: "restOption", kind: "rest" }, bundle);
+      const room = out.run.room;
+      expect(room?.kind).toBe("rewards");
+      if (room?.kind !== "rewards") throw new Error("expected rewards");
+      expect(room.source).toBe("relic");
+      expect(room.entries.filter((e) => e.kind === "card")).toHaveLength(3);
+      const skipped = advance(out, { cmd: "skipRewards" }, bundle);
+      expect(skipped.run.deck).toHaveLength(before.run.deck.length);
+      expect(skipped.run.room).toEqual({ kind: "map" });
+    });
+
+    test("choosing a Dream Catcher card adds it to the deck", () => {
+      const before = atDreamCatcherRest("DREAM_TAKE");
+      let out = advance(before, { cmd: "restOption", kind: "rest" }, bundle);
+      const room = out.run.room;
+      if (room?.kind !== "rewards") throw new Error("expected rewards");
+      const rewardIndex = room.entries.findIndex((e) => e.kind === "card");
+      const reward = room.entries[rewardIndex];
+      if (!reward || reward.kind !== "card") throw new Error("expected card reward");
+      out = advance(out, { cmd: "takeReward", i: rewardIndex }, bundle);
+      expect(out.run.deck).toHaveLength(before.run.deck.length + 1);
+      expect(out.run.deck.at(-1)).toMatchObject({ defId: reward.id, upgrades: reward.upgraded ? 1 : 0 });
+    });
+
+    test("smithing and recalling do not offer Dream Catcher rewards", () => {
+      const smithed = advance(
+        atDreamCatcherRest("DREAM_SMITH"),
+        { cmd: "restOption", kind: "smith", deckIdx: 0 },
+        bundle,
+      );
+      expect(smithed.run.room).toEqual({ kind: "rest", used: true });
+
+      const recalled = advance(atDreamCatcherRest("DREAM_RECALL"), { cmd: "restOption", kind: "recall" }, bundle);
+      expect(recalled.run.keys.ruby).toBe(true);
+      expect(recalled.run.room).toEqual({ kind: "rest", used: true });
+    });
+
+    test("card-count relics modify the Dream Catcher reward", () => {
+      const question = atDreamCatcherRest("DREAM_QUESTION");
+      question.run.relics.push({ defId: "QUESTION_CARD", counter: 0 });
+      const questionOut = advance(question, { cmd: "restOption", kind: "rest" }, bundle);
+      expect(
+        questionOut.run.room?.kind === "rewards"
+          ? questionOut.run.room.entries.filter((e) => e.kind === "card")
+          : [],
+      ).toHaveLength(4);
+
+      const crown = atDreamCatcherRest("DREAM_CROWN");
+      crown.run.relics.push({ defId: "BUSTED_CROWN", counter: 0 });
+      const crownOut = advance(crown, { cmd: "restOption", kind: "rest" }, bundle);
+      expect(
+        crownOut.run.room?.kind === "rewards"
+          ? crownOut.run.room.entries.filter((e) => e.kind === "card")
+          : [],
+      ).toHaveLength(1);
+    });
+
+    test("Dream Catcher reward survives JSON save/load", () => {
+      const out = advance(atDreamCatcherRest("DREAM_SAVE"), { cmd: "restOption", kind: "rest" }, bundle);
+      const saved = JSON.parse(JSON.stringify(out)) as GameState;
+      const room = saved.run.room;
+      if (room?.kind !== "rewards") throw new Error("expected rewards");
+      const rewardIndex = room.entries.findIndex((e) => e.kind === "card");
+      const reward = room.entries[rewardIndex];
+      if (!reward || reward.kind !== "card") throw new Error("expected card reward");
+      const resumed = advance(saved, { cmd: "takeReward", i: rewardIndex }, bundle);
+      expect(resumed.run.deck.at(-1)).toMatchObject({ defId: reward.id, upgrades: reward.upgraded ? 1 : 0 });
+    });
+  });
+
   // Issue #7: the option list was hardcoded, so five relics that change what a
   // campfire offers did nothing. Availability follows the reference's bitset.
   describe("relics that change the campfire", () => {

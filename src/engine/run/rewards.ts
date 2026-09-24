@@ -155,7 +155,7 @@ export function obtainRelicFromPool(run: RunState, tier: RelicPoolTier): RelicId
 
 // --- card rewards ----------------------------------------------------------------
 
-export type RewardRoomKind = "monster" | "elite" | "boss" | "event";
+export type RewardRoomKind = "monster" | "elite" | "boss" | "event" | "rest";
 
 /** rollCardRarity (GameContext.cpp:1607-1630): boss rooms return RARE before
  *  any roll; otherwise d100 + cardRarityFactor vs elite 10/40, non-elite 3/37.
@@ -165,7 +165,7 @@ export function rollCardRarity(ctx: EffectCtx, room: RewardRoomKind): CardRarity
   const roll = ctx.rng("cardRng").random(99) + ctx.run.blizzard.cardRarityFactor;
   let rareChance = room === "elite" ? CARD_REWARD.rareChance.elite : CARD_REWARD.rareChance.nonElite;
   const uncommonChance = room === "elite" ? CARD_REWARD.uncommonChance.elite : CARD_REWARD.uncommonChance.nonElite;
-  if (hasRelic(ctx.run, "NLOTHS_GIFT")) rareChance *= 3;
+  if (room !== "rest" && hasRelic(ctx.run, "NLOTHS_GIFT")) rareChance *= 3;
   if (roll < rareChance) return "rare";
   if (roll < rareChance + uncommonChance) return "uncommon";
   return "common";

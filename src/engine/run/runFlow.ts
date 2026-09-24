@@ -28,6 +28,7 @@ import {
   classCardPool,
   classColor,
   combatRelicTier,
+  createCardReward,
   hasRelic,
   nextRewardGroup,
   obtainRelicFromPool,
@@ -846,6 +847,15 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
       if (cmd.kind === "rest") {
         // applyRest fires onRest itself
         applyRest(ctx);
+        room.used = true;
+        if (hasRelic(run, "DREAM_CATCHER")) {
+          run.room = {
+            kind: "rewards",
+            entries: cardGroupEntries(createCardReward(ctx, "rest")),
+            source: "relic",
+          };
+        }
+        break;
       } else if (cmd.kind === "recall") {
         // Recall: take the ruby key instead of resting (once per run)
         run.keys.ruby = true;
