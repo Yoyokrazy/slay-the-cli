@@ -340,6 +340,18 @@ describe("VAULT", () => {
     expect(s.run.hp).toBe(72 - 5 - 10);
   });
 
+  test("skipped monster turn does not fire monster end-of-turn powers", () => {
+    let s = fightWithInHand(["VAULT"], { deck: ["VAULT", ...strikes(9)], monsters: ["T_WGUARD"] });
+    const m = s.combat!.monsters[0]!;
+    m.powers.push({ id: "RITUAL", amount: 3, justApplied: false, data: null });
+    m.powers.push({ id: "STRENGTH_UP", amount: 5, justApplied: false, data: null });
+    m.powers.push({ id: "SHACKLED", amount: 7, justApplied: false, data: null });
+    s = play(s, "VAULT");
+    expect(s.combat!.turn).toBe(2);
+    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "STRENGTH")).toBeUndefined();
+    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "SHACKLED")?.amount).toBe(7);
+  });
+
   test("upgraded costs 2", () => {
     let s = fight({ deck: [{ defId: "VAULT", upgrades: 1 }, ...strikes(4)] });
     s = play(s, "STRIKE_PURPLE");

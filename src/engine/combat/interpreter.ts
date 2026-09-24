@@ -140,7 +140,7 @@ export function executeAction(ctx: EffectCtx, a: GameAction): void {
       monsterStep(ctx, a.remaining);
       break;
     case "endRound":
-      endRound(ctx);
+      endRound(ctx, a.skipMonsterEndTurn === true);
       break;
     case "spawnMonster":
       spawnMonster(ctx, a.monsterId, a.slot, a.hp, a.rollFirstMove);
@@ -815,7 +815,7 @@ function monsterTurn(ctx: EffectCtx): void {
   if (combat.turnFlags.skipMonsterTurn) {
     // Vault: monsters don't act this round (round-end ticks still happen)
     combat.turnFlags.skipMonsterTurn = false;
-    ctx.queue.addToBottom({ kind: "endRound" });
+    ctx.queue.addToBottom({ kind: "endRound", skipMonsterEndTurn: true });
     return;
   }
   // Pre-turn phase for the whole group BEFORE anyone acts
@@ -842,6 +842,10 @@ function monsterTurn(ctx: EffectCtx): void {
  * startPlayerTurn. Queueing every move plus endRound up front used to let
  * those land after the turn had already flipped, paying out a round late and
  * surviving startPlayerTurn's block reset.
+ *
+ * Monster atEndOfTurn hooks are intentionally NOT fired here: the reference
+ * applies them once the group has finished acting and the action queue is
+ * empty, immediately before atEndOfRound duration ticks.
  */
 function monsterStep(ctx: EffectCtx, remaining: number[]): void {
   const [idx, ...rest] = remaining;
@@ -871,7 +875,6 @@ function executeMonsterMove(ctx: EffectCtx, idx: number): void {
     if (!move) throw new Error(`unknown move ${m.move} on ${m.id}`);
     move.execute(ctx, m);
   }
-  fireHook(ctx, monster(idx), "atEndOfTurn", false);
   // roll next move (intent for the coming turn)
   if (!m.isDead && !m.isEscaped) rollMove(ctx, m);
 }
@@ -885,9 +888,15 @@ export function rollMove(ctx: EffectCtx, m: MonsterState): void {
   if (m.moveHistory.length > 8) m.moveHistory.shift();
 }
 
-function endRound(ctx: EffectCtx): void {
+function endRound(ctx: EffectCtx, skipMonsterEndTurn: boolean): void {
   const combat = ctx.combat!;
-  // player powers tick first, then each monster's
+  if (!skipMonsterEndTurn) {
+    for (const m of combat.monsters) {
+      if (!m.isDead && !m.isEscaped && !m.halfDead) fireHook(ctx, monster(m.idx), "atEndOfTurn", false);
+    }
+  }
+  // Java/lightspeed order: monster atEndOfTurn hooks, then player end-of-round
+  // ticks, then each monster's end-of-round ticks.
   tickTurnBasedPowers(ctx, PLAYER);
   for (const m of combat.monsters) {
     if (!m.isDead && !m.isEscaped) tickTurnBasedPowers(ctx, monster(m.idx));

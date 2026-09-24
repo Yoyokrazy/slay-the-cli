@@ -475,6 +475,17 @@ describe("Transient", () => {
     s = endTurn(s);
     expect(hp1 - s.run.hp).toBe(40); // turn 2 at full strength
   });
+
+  test("Shifting restores Strength lost to player Thorns during Transient's own attack", () => {
+    let s = fight(["TRANSIENT"], { seed: "SHIFT_THORNS", deck: defendDeck, relics: ["BRONZE_SCALES"] });
+    mon(s).powers.push({ id: "STRENGTH", amount: 2, justApplied: false, data: null });
+    const hp0 = s.run.hp;
+    s = endTurn(s);
+    expect(hp0 - s.run.hp).toBe(32);
+    expect(mon(s).hp).toBe(996);
+    expect(monPower(s, 0, "STRENGTH")?.amount ?? 0).toBe(2);
+    expect(monPower(s, 0, "SHACKLED")).toBeUndefined();
+  });
 });
 
 // ------------------------------------------------------------------------------

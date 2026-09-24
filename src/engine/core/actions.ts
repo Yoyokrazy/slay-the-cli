@@ -62,7 +62,7 @@ export type GameAction =
   | { kind: "monsterTurn" }
   /** one monster acts, then the rest re-queue behind whatever its move queued */
   | { kind: "monsterStep"; remaining: number[] }
-  | { kind: "endRound" }
+  | { kind: "endRound"; skipMonsterEndTurn?: boolean }
   // escapes into content-registered code with plain-data args
   | { kind: "effect"; ref: EffectRefId; args?: unknown }
   // pauses the interpreter for player input; resume is a registered continuation

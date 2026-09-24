@@ -81,8 +81,18 @@ export const corePowers: PowerDef[] = [
     kind: "buff",
     stacking: "intensity",
     turnBased: false,
+    onApply: (ctx, target) => {
+      if (target.kind === "monster") {
+        const p = ctx.combat!.monsters[target.idx]?.powers.find((x) => x.id === "RITUAL");
+        if (p) p.data = { skipFirst: true };
+      }
+    },
     hooks: {
       atEndOfTurn: (ctx) => {
+        if (ctx.power!.data && (ctx.power!.data.skipFirst as boolean | undefined)) {
+          ctx.power!.data = null;
+          return;
+        }
         ctx.queue.addToBottom({
           kind: "applyPower",
           source: ctx.owner,
