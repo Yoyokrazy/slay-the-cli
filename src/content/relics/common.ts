@@ -462,7 +462,7 @@ export const commonRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Whenever you use a potion, heal 5 HP." RUN-LAYER: onUsePotion not fired yet.
+    // "Whenever you use a potion, heal 5 HP."
     id: "TOY_ORNITHOPTER",
     name: "Toy Ornithopter",
     tier: "common",

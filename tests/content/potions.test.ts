@@ -367,6 +367,35 @@ describe("resource potions", () => {
     expect(s.run.potions[0]).toBeNull();
   });
 
+  test("Toy Ornithopter heals after a choice potion resolves", () => {
+    let s = game({ hp: 62, relics: ["TOY_ORNITHOPTER"] });
+    s.run.potions[0] = "POWER_POTION";
+    s = advance(s, { cmd: "usePotion", slot: 0 }, B);
+    expect(s.pending).not.toBeNull();
+    expect(s.run.hp).toBe(62);
+
+    s = advance(s, { cmd: "choose", indices: [0] }, B);
+    expect(s.pending).toBeNull();
+    expect(s.run.hp).toBe(67);
+  });
+
+  test("Toy Ornithopter heals exactly once for a non-choice potion", () => {
+    let s = game({ hp: 62, relics: ["TOY_ORNITHOPTER"] });
+    s.run.potions[0] = "DEXTERITY_POTION";
+    s = advance(s, { cmd: "usePotion", slot: 0 }, B);
+    expect(power(s, "DEXTERITY")?.amount).toBe(2);
+    expect(s.run.hp).toBe(67);
+  });
+
+  test("Toy Ornithopter heals immediately outside combat", () => {
+    let s = outsideCombat();
+    s.run.relics = [{ defId: "TOY_ORNITHOPTER", counter: 0 }];
+    s.run.hp = 40;
+    s.run.potions[0] = "BLOOD_POTION";
+    s = advance(s, { cmd: "usePotion", slot: 0 }, B);
+    expect(s.run.hp).toBe(61);
+  });
+
   test("Energy Potion: +2 energy", () => {
     let s = game({});
     s = usePotion(s, "ENERGY_POTION");

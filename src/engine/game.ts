@@ -4,12 +4,13 @@
 //   advance(state, command, bundle) -> new state
 // State is immutable from the caller's perspective: advance() deep-clones,
 // executes synchronously until the next player-input point, and returns the
-// clone. The action queue is always empty when advance() returns.
+// clone. The action queue is empty when advance() returns unless a pending
+// choice paused combat with queued follow-up actions.
 
 import type { CharacterId, MonsterId } from "./core/ids";
 import type { CombatState } from "./combat/combatState";
 import type { RunState } from "./run/runState";
-import type { PendingChoice } from "./core/actions";
+import type { GameAction, PendingChoice } from "./core/actions";
 import { potionUseBlockedReason, type ContentBundle, type EffectCtx } from "./content/defs";
 import { needsEnemyTarget } from "./content/targeting";
 import { ActionQueue } from "./core/queue";
@@ -36,6 +37,8 @@ export interface GameState {
   pending: PendingChoice | null;
   rng: RngRegistryState;
   outcome: null | { kind: "victory" | "death" };
+  /** queued combat actions preserved while a PendingChoice is awaiting input */
+  pendingQueue?: GameAction[];
   /** drained by the UI after each advance; not part of logical state */
   eventLog: GameEvent[];
 }
@@ -106,6 +109,7 @@ function finish(box: CtxBox): GameState {
   const { ctx, state, registry } = box;
   if (ctx.rt.combatOver) ctx.rt.pending = null; // decided fights leave no pending picks
   state.pending = ctx.rt.pending;
+  state.pendingQueue = ctx.rt.pending ? ctx.queue.snapshot() : undefined;
   if (ctx.rt.combatOver === "victory") {
     state.outcome = null; // run continues; the run layer consumes the victory
     state.eventLog.push({ event: "combatEnded", payload: "victory" });
@@ -291,11 +295,14 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
     case "choose": {
       const pending = state.pending;
       if (!pending) throw new Error("nothing to choose");
+      const pendingQueue = state.pendingQueue ?? [];
       state.pending = null;
+      state.pendingQueue = undefined;
       ctx.rt.pending = null;
       const resume = bundle.effects.get(pending.resume);
       if (!resume) throw new Error(`unknown resume effect ${pending.resume}`);
       resume(ctx, { ...(pending.resumeArgs as object), chosen: cmd.indices });
+      ctx.queue.addAllToBottom(pendingQueue);
       if (state.combat) runQueue(ctx); // run-layer choices resolve without an interpreter pass
       break;
     }

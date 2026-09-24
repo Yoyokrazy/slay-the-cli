@@ -10,6 +10,10 @@ import type { GameAction } from "./actions";
 export class ActionQueue {
   private items: GameAction[] = [];
 
+  constructor(items: GameAction[] = []) {
+    this.items = [...items];
+  }
+
   addToBottom(a: GameAction): void {
     this.items.push(a);
   }
@@ -32,5 +36,13 @@ export class ActionQueue {
 
   clear(): void {
     this.items.length = 0;
+  }
+
+  snapshot(): GameAction[] {
+    return [...this.items];
+  }
+
+  addAllToBottom(actions: GameAction[]): void {
+    this.items.push(...actions);
   }
 }
