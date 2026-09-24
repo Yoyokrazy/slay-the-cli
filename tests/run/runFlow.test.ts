@@ -25,6 +25,20 @@ import type { MapNode } from "../../src/engine/run/runState";
 import { buildBaseContentBundle } from "../../src/content/index";
 
 const bundle = makeRunTestBundle();
+const courierBundle = makeRunTestBundle();
+for (const id of ["THE_COURIER", "MEMBERSHIP_CARD"] as const) {
+  const def = allRelics.find((r) => r.id === id);
+  if (!def) throw new Error(`missing ${id} relic`);
+  courierBundle.relics.set(def.id, def);
+}
+const courierNoDiscountBundle = makeRunTestBundle();
+courierNoDiscountBundle.relics.set("THE_COURIER", {
+  id: "THE_COURIER",
+  name: "The Courier",
+  tier: "uncommon",
+  pool: "shared",
+  hooks: {},
+});
 const parasiteBundle = makeRunTestBundle();
 const parasiteDef = curseCards.find((c) => c.id === "PARASITE");
 if (!parasiteDef) throw new Error("missing PARASITE card def");
@@ -86,6 +100,15 @@ function matryoshkaCounter(s: GameState): number | undefined {
 function giveMatryoshka(s: GameState): void {
   s.run.relics.push({ defId: "MATRYOSHKA", counter: 2 });
   s.run.pools.uncommonRelics = s.run.pools.uncommonRelics.filter((id) => id !== "MATRYOSHKA");
+}
+
+function giveRelic(s: GameState, id: string): void {
+  s.run.relics.push({ defId: id, counter: 0 });
+  s.run.pools.commonRelics = s.run.pools.commonRelics.filter((r) => r !== id);
+  s.run.pools.uncommonRelics = s.run.pools.uncommonRelics.filter((r) => r !== id);
+  s.run.pools.rareRelics = s.run.pools.rareRelics.filter((r) => r !== id);
+  s.run.pools.shopRelics = s.run.pools.shopRelics.filter((r) => r !== id);
+  s.run.pools.bossRelics = s.run.pools.bossRelics.filter((r) => r !== id);
 }
 
 function testMapNode(x: number, y: number, kind: MapNode["kind"], edges: number[] = []): MapNode {
@@ -628,11 +651,21 @@ describe("? room resolution", () => {
 });
 
 describe("rooms: rest / treasure / shop / event stubs", () => {
-  function forceRoom(seed: string, room: (ctx: ReturnType<typeof makeTestCtx>["ctx"]) => void): GameState {
-    let s = run(seed);
-    s = advance(s, { cmd: "neowPick", i: 1 }, bundle);
-    const { ctx, saveRng } = makeTestCtx(s, bundle);
-    room(ctx);
+  function shopOf(state: GameState) {
+    const room = state.run.room;
+    if (room?.kind !== "shop") throw new Error("expected shop");
+    return room.shop;
+  }
+
+  function forceRoom(
+    seed: string,
+    room: (ctx: ReturnType<typeof makeTestCtx>["ctx"], state: GameState) => void,
+    content = bundle,
+  ): GameState {
+    let s = createRun({ seed, bundle: content, character: "IRONCLAD" });
+    s = advance(s, { cmd: "neowPick", i: 1 }, content);
+    const { ctx, saveRng } = makeTestCtx(s, content);
+    room(ctx, s);
     saveRng();
     return s;
   }
@@ -913,9 +946,11 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
 
     s = advance(s, { cmd: "shopBuy", kind: "relic", idx: 2 }, bundle);
     expect(s.run.relics.some((r) => r.defId.startsWith("T_RELIC_S_"))).toBe(true); // SHOP tier slot
+    expect(s.run.room?.kind === "shop" && s.run.room.shop.relics[2]!.sold).toBe(true);
 
     s = advance(s, { cmd: "shopBuy", kind: "potion", idx: 0 }, bundle);
     expect(s.run.potions.filter((p) => p !== null).length).toBe(1);
+    expect(s.run.room?.kind === "shop" && s.run.room.shop.potions[0]!.sold).toBe(true);
 
     // removal
     const shopRoom = s.run.room!;
@@ -936,6 +971,102 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
     const later = s.run.room!;
     if (later.kind !== "shop") throw new Error("not shop");
     expect(later.shop.removalCost).toBe(100);
+  });
+
+  test("shop: Courier restocks bought card, relic, and potion slots", () => {
+    let s = forceRoom(
+      "COURIER",
+      (ctx, state) => {
+        giveRelic(state, "THE_COURIER");
+        ctx.run.room = { kind: "shop", shop: generateShop(ctx) };
+      },
+      courierBundle,
+    );
+    s.run.gold = 5000;
+    let shop = shopOf(s);
+
+    const boughtCard = shop.cards[0]!;
+    const boughtCardType = courierBundle.cards.get(boughtCard.id)!.type;
+    const boughtRelic = shop.relics[0]!.id;
+    const boughtPotion = shop.potions[0]!.id;
+
+    s = advance(s, { cmd: "shopBuy", kind: "card", idx: 0 }, courierBundle);
+    shop = shopOf(s);
+    expect(shop.cards[0]!.sold).toBe(false);
+    expect(courierBundle.cards.get(shop.cards[0]!.id)!.type).toBe(boughtCardType);
+    expect(s.run.deck.some((c) => c.defId === boughtCard.id)).toBe(true);
+
+    s = advance(s, { cmd: "shopBuy", kind: "relic", idx: 0 }, courierBundle);
+    shop = shopOf(s);
+    expect(shop.relics[0]!.sold).toBe(false);
+    expect(shop.relics[0]!.tier).not.toBe("shop");
+    expect(s.run.relics.some((r) => r.defId === boughtRelic)).toBe(true);
+
+    s = advance(s, { cmd: "shopBuy", kind: "potion", idx: 0 }, courierBundle);
+    shop = shopOf(s);
+    expect(shop.potions[0]!.sold).toBe(false);
+    expect(s.run.potions).toContain(boughtPotion);
+  });
+
+  test("shop: Courier restock prices use the normal rounded discount path", () => {
+    const makeShop = (seed: string, content = courierBundle) =>
+      forceRoom(
+        seed,
+        (ctx, state) => {
+          giveRelic(state, "THE_COURIER");
+          ctx.run.room = { kind: "shop", shop: generateShop(ctx) };
+        },
+        content,
+      );
+    let plain = makeShop("COURIER_PRICE", courierNoDiscountBundle);
+    let discounted = makeShop("COURIER_PRICE", courierBundle);
+    if (plain.run.room?.kind !== "shop" || discounted.run.room?.kind !== "shop") throw new Error("expected shop");
+    plain.run.gold = 5000;
+    discounted.run.gold = 5000;
+    plain = advance(plain, { cmd: "shopBuy", kind: "card", idx: 0 }, courierNoDiscountBundle);
+    discounted = advance(discounted, { cmd: "shopBuy", kind: "card", idx: 0 }, courierBundle);
+    if (plain.run.room?.kind !== "shop" || discounted.run.room?.kind !== "shop") throw new Error("expected shop");
+    const plainSlot = plain.run.room.shop.cards[0]!;
+    const discountedSlot = discounted.run.room.shop.cards[0]!;
+    expect(discountedSlot.sold).toBe(false);
+    expect(discountedSlot.id).toBe(plainSlot.id);
+    expect(discountedSlot.rarity).toBe(plainSlot.rarity);
+    expect(discountedSlot.price).toBe(Math.round(plainSlot.price * 0.8));
+  });
+
+  test("shop: buying Courier itself does not restock the purchased slot", () => {
+    let s = forceRoom(
+      "BUY_COURIER",
+      (ctx) => {
+        ctx.run.room = { kind: "shop", shop: generateShop(ctx) };
+        ctx.run.room.shop.relics[0] = { id: "THE_COURIER", tier: "uncommon", price: 10, sold: false };
+      },
+      courierBundle,
+    );
+    s.run.gold = 5000;
+    s = advance(s, { cmd: "shopBuy", kind: "relic", idx: 0 }, courierBundle);
+    if (s.run.room?.kind !== "shop") throw new Error("expected shop");
+    expect(s.run.room.shop.relics[0]!.sold).toBe(true);
+    expect(s.run.relics.some((r) => r.defId === "THE_COURIER")).toBe(true);
+  });
+
+  test("shop: Courier restock is deterministic for a fixed seed", () => {
+    const play = () => {
+      let s = forceRoom(
+        "COURIER_DET",
+        (ctx, state) => {
+          giveRelic(state, "THE_COURIER");
+          ctx.run.room = { kind: "shop", shop: generateShop(ctx) };
+        },
+        courierBundle,
+      );
+      s.run.gold = 5000;
+      s = advance(s, { cmd: "shopBuy", kind: "card", idx: 0 }, courierBundle);
+      s = advance(s, { cmd: "shopBuy", kind: "relic", idx: 0 }, courierBundle);
+      s = advance(s, { cmd: "shopBuy", kind: "potion", idx: 0 }, courierBundle);
+      return JSON.stringify({ run: s.run, rng: s.rng });
+    };
+    expect(play()).toBe(play());
   });
 
   test("shop with empty gold refuses purchases", () => {

@@ -35,7 +35,7 @@ import {
   nextRewardGroup,
   obtainRelicFromPool,
 } from "./rewards";
-import { generateShop, repriceAfterRelic } from "./shop";
+import { generateShop, repriceAfterRelic, restockShopCardSlot, restockShopRelicSlot, restockShopPotionSlot } from "./shop";
 import { setupTreasureRoom, openChestContents, claimChestRelic, claimChestSapphireKey } from "./treasure";
 import { applyRest, applySmith, canSmith } from "./rest";
 import { getNeowOptions, applyNeowBonus, applyNeowDrawback } from "./neow";
@@ -802,6 +802,7 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
     case "shopBuy": {
       if (room.kind !== "shop") throw new Error("not in a shop");
       const shop = room.shop;
+      const courierRestock = hasRelic(run, "THE_COURIER");
       if (cmd.kind === "card") {
         const slot = shop.cards[cmd.idx];
         if (!slot || slot.sold) throw new Error("card slot unavailable");
@@ -809,16 +810,18 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
         run.gold -= slot.price;
         slot.sold = true;
         addCardToDeck(ctx, slot.id, false);
-        // TODO THE_COURIER restock (meta.shop.courierRestock)
+        if (courierRestock) restockShopCardSlot(ctx, slot);
       } else if (cmd.kind === "relic") {
         const slot = shop.relics[cmd.idx];
         if (!slot || slot.sold) throw new Error("relic slot unavailable");
         if (run.gold < slot.price) throw new Error("not enough gold");
+        const boughtRelicId = slot.id;
         run.gold -= slot.price;
         slot.sold = true;
-        addRelic(ctx, slot.id);
+        addRelic(ctx, boughtRelicId);
+        if (courierRestock) restockShopRelicSlot(ctx, slot);
         // mid-shop reprice (Membership Card immediately halves remaining prices)
-        repriceAfterRelic(ctx, shop, slot.id);
+        repriceAfterRelic(ctx, shop, boughtRelicId);
       } else {
         const slot = shop.potions[cmd.idx];
         if (!slot || slot.sold) throw new Error("potion slot unavailable");
@@ -829,6 +832,7 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
         run.gold -= slot.price;
         slot.sold = true;
         run.potions[free] = slot.id;
+        if (courierRestock) restockShopPotionSlot(ctx, slot);
       }
       noteShopSpend(run);
       break;

@@ -7,10 +7,16 @@
 //   shops CHEAPER; the wiki documents A16 as "Shops are more costly." (commonly
 //   +10%). We implement the WIKI side: prices (and removal cost) x1.10, rounded,
 //   applied before relic price hooks (Courier 0.80, Membership Card 0.50).
+//
+// COURIER RESTOCK (decompiled game authority over known sts_lightspeed bugs):
+//   purchaseCard / StoreRelic.purchaseRelic / StorePotion.purchasePotion replace
+//   bought slots when Courier was owned at purchase entry. New-slot prices use
+//   the same setup discounts/order; we intentionally do NOT copy lightspeed's
+//   getNewCardPrice duplicate Courier check nor getNewPrice rounding discard.
 
 import type { EffectCtx } from "../content/defs";
-import type { ShopState, ShopCardSlot, CardRarityRoll, RelicPoolTier } from "./runState";
-import type { CardId } from "../core/ids";
+import type { ShopState, ShopCardSlot, ShopRelicSlot, ShopPotionSlot, CardRarityRoll, RelicPoolTier } from "./runState";
+import type { CardId, PotionId } from "../core/ids";
 import { PLAYER } from "../core/ids";
 import { foldHook } from "../core/hooks";
 import { f32mul } from "../core/math";
@@ -32,6 +38,7 @@ export const SHOP = {
   removal: { basePrice: 75, increasePerPurchase: 25, smilingMask: 50 },
   relicTierRoll: { commonBelow: 48, uncommonBelow: 82 },
   ascension16Factor: 1.1, // DISPUTED - wiki side implemented (lightspeed uses 0.80)
+  colorlessRareChance: 0.3,
 } as const;
 
 /** Shop::rollCardRarityShop - reads cardRarityFactor but does NOT update it. */
@@ -86,6 +93,79 @@ function finalizePrice(ctx: EffectCtx, price: number): number {
   return Math.round(foldHook(ctx, PLAYER, "modifyPrice", applyA16(ctx, price)));
 }
 
+function baseShopCardPrice(ctx: EffectCtx, rarity: CardRarityRoll, colorless: boolean): number {
+  const merchantRng = ctx.rng("merchantRng");
+  let price = f32mul(SHOP.basePrices.cardByRarity[rarity], merchantRng.randomFloatRange(SHOP.cardJitter.min, SHOP.cardJitter.max));
+  if (colorless) price = f32mul(price, SHOP.colorlessFactor);
+  return Math.trunc(price);
+}
+
+function baseShopRelicPrice(ctx: EffectCtx, tier: RelicPoolTier): number {
+  return Math.round(f32mul(SHOP.basePrices.relicByTier[tier], ctx.rng("merchantRng").randomFloatRange(SHOP.otherJitter.min, SHOP.otherJitter.max)));
+}
+
+function baseShopPotionPrice(ctx: EffectCtx, id: PotionId): number {
+  return Math.round(
+    f32mul(
+      SHOP.basePrices.potionByRarity[ctx.bundle.potions.get(id)!.rarity],
+      ctx.rng("merchantRng").randomFloatRange(SHOP.otherJitter.min, SHOP.otherJitter.max),
+    ),
+  );
+}
+
+function priceShopCard(ctx: EffectCtx, rarity: CardRarityRoll, colorless: boolean): number {
+  return finalizePrice(ctx, baseShopCardPrice(ctx, rarity, colorless));
+}
+
+function priceShopRelic(ctx: EffectCtx, tier: RelicPoolTier): number {
+  return finalizePrice(ctx, baseShopRelicPrice(ctx, tier));
+}
+
+function priceShopPotion(ctx: EffectCtx, id: PotionId): number {
+  return finalizePrice(ctx, baseShopPotionPrice(ctx, id));
+}
+
+/** Courier card restock: class cards keep the bought card's type and roll shop
+ * rarity on cardRng; colorless cards use merchantRng's 30% rare roll. No setup
+ * duplicate retry and no sale-slot halving is applied to restocks. */
+export function restockShopCardSlot(ctx: EffectCtx, slot: ShopCardSlot): void {
+  if (slot.colorless) {
+    const rarity = ctx.rng("merchantRng").randomBoolean(SHOP.colorlessRareChance) ? "rare" : "uncommon";
+    const id = rollColorlessCard(ctx, rarity);
+    slot.id = id;
+    slot.rarity = rarity;
+    slot.price = priceShopCard(ctx, rarity, true);
+  } else {
+    const type = ctx.bundle.cards.get(slot.id)!.type;
+    if (type !== "attack" && type !== "skill" && type !== "power") throw new Error(`invalid shop card type: ${type}`);
+    const pick = rollShopClassCard(ctx, type);
+    slot.id = pick.id;
+    slot.rarity = pick.rarity;
+    slot.price = priceShopCard(ctx, pick.rarity, false);
+  }
+  slot.sold = false;
+}
+
+/** Courier relic restock: all bought relic slots use Shop::rollRelicTier
+ * (common/uncommon/rare), including the original shop-tier slot. */
+export function restockShopRelicSlot(ctx: EffectCtx, slot: ShopRelicSlot): void {
+  const tier = rollShopRelicTier(ctx);
+  slot.id = obtainRelicFromPool(ctx.run, tier);
+  slot.tier = tier;
+  slot.price = priceShopRelic(ctx, tier);
+  slot.sold = false;
+}
+
+/** Courier potion restock: returnRandomPotion on potionRng, priced like setup.
+ * If potion generation is blocked/empty, the purchased slot remains sold. */
+export function restockShopPotionSlot(ctx: EffectCtx, slot: ShopPotionSlot): void {
+  const id = returnRandomPotion(ctx);
+  if (id === null) return;
+  slot.id = id;
+  slot.price = priceShopPotion(ctx, id);
+  slot.sold = false;
+}
+
 /** Generate the full shop inventory (Shop::setup / setupCards / setupRelics /
  *  setupPotions). Per-stream call order is preserved exactly; the sale slot is
  *  halved (integer division) BEFORE the A16/relic price factors. */
@@ -111,13 +191,13 @@ export function generateShop(ctx: EffectCtx): ShopState {
   picks.push({ id: rollColorlessCard(ctx, "rare"), rarity: "rare", colorless: true });
 
   // prices: int(base * merchantRng.random(0.9, 1.1)) - colorless x1.2, then sale
-  const cards: ShopCardSlot[] = picks.map((p) => {
-    const base = SHOP.basePrices.cardByRarity[p.rarity];
-    const jitter = merchantRng.randomFloatRange(SHOP.cardJitter.min, SHOP.cardJitter.max);
-    let price = f32mul(base, jitter);
-    if (p.colorless) price = f32mul(price, SHOP.colorlessFactor);
-    return { id: p.id, rarity: p.rarity, price: Math.trunc(price), sold: false, colorless: p.colorless };
-  });
+  const cards: ShopCardSlot[] = picks.map((p) => ({
+    id: p.id,
+    rarity: p.rarity,
+    price: baseShopCardPrice(ctx, p.rarity, p.colorless),
+    sold: false,
+    colorless: p.colorless,
+  }));
   const saleIdx = merchantRng.random(SHOP.saleSlots - 1);
   cards[saleIdx]!.price = Math.trunc(cards[saleIdx]!.price / 2);
 
@@ -131,7 +211,7 @@ export function generateShop(ctx: EffectCtx): ShopState {
   const relics = relicPicks.map((r) => ({
     id: r.id,
     tier: r.tier,
-    price: Math.round(f32mul(SHOP.basePrices.relicByTier[r.tier], merchantRng.randomFloatRange(SHOP.otherJitter.min, SHOP.otherJitter.max))),
+    price: baseShopRelicPrice(ctx, r.tier),
     sold: false,
   }));
 
@@ -141,12 +221,7 @@ export function generateShop(ctx: EffectCtx): ShopState {
     .filter((id): id is string => id !== null)
     .map((id) => ({
       id,
-      price: Math.round(
-        f32mul(
-          SHOP.basePrices.potionByRarity[ctx.bundle.potions.get(id)!.rarity],
-          merchantRng.randomFloatRange(SHOP.otherJitter.min, SHOP.otherJitter.max),
-        ),
-      ),
+      price: baseShopPotionPrice(ctx, id),
       sold: false,
     }));
 
