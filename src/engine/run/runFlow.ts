@@ -34,6 +34,7 @@ import {
   hasRelic,
   nextRewardGroup,
   obtainRelicFromPool,
+  rollGoldReward,
 } from "./rewards";
 import { generateShop, repriceAfterRelic, restockShopCardSlot, restockShopRelicSlot, restockShopPotionSlot } from "./shop";
 import { setupTreasureRoom, openChestContents, claimChestRelic, claimChestSapphireKey } from "./treasure";
@@ -409,6 +410,7 @@ export function handleCombatVictory(state: GameState, ctx: EffectCtx, registry: 
 
   if (room.roomKind === "boss") {
     if (run.act >= 4) {
+      rollGoldReward(ctx, "boss");
       // the Heart falls: the run is won
       clearCombat();
       state.outcome = { kind: "victory" };
@@ -416,9 +418,10 @@ export function handleCombatVictory(state: GameState, ctx: EffectCtx, registry: 
       return;
     }
     if (run.act === 3) {
+      rollGoldReward(ctx, "boss");
       // A20: a second, different act-3 boss follows immediately on the next
       // floor (bossList[1] from the act's boss shuffle). No reward screen
-      // between the two. // VERIFY-JAR: whether boss-1 gold banks separately.
+      // between the two.
       if (run.ascension >= 20 && !run.history.a20SecondBoss) {
         run.history.a20SecondBoss = true;
         run.floor++;

@@ -149,6 +149,7 @@ describe("A20: double act-3 boss", () => {
     expect(seenEncounters).toEqual([bossList[0]!, bossList[1]!]); // two DIFFERENT bosses, in shuffle order
     expect(s.run.history.a20SecondBoss).toBe(true);
     expect(s.run.floor).toBe(floorBefore + 2); // boss floor + second-boss floor
+    expect(s.rng.floor.miscRng.counter).toBe(1); // second boss's hidden gold roll; no reward screen
     expect(s.outcome?.kind).toBe("victory"); // no keys -> the climb ends after boss 2
   });
 

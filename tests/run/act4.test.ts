@@ -124,7 +124,9 @@ describe("act 3 boss gating", () => {
     let s = atAct3BossDoor({ emerald: true, ruby: true, sapphire: false });
     s = adv(s, { cmd: "mapPick", x: 3, y: 15 });
     expect(s.combat!.monsters.map((m) => m.id)).toEqual(["DONU", "DECA"]); // multi-monster boss
+    const miscBefore = s.rng.floor.miscRng.counter;
     s = winCombat(s);
+    expect(s.rng.floor.miscRng.counter).toBe(miscBefore + 1); // hidden Act 3 boss gold roll; no reward screen
     expect(s.outcome?.kind).toBe("victory");
     expect(s.run.room?.kind).toBe("gameOver");
   });
@@ -132,7 +134,9 @@ describe("act 3 boss gating", () => {
   test("with all keys: the run continues into the fixed Act 4", () => {
     let s = atAct3BossDoor({ emerald: true, ruby: true, sapphire: true });
     s = adv(s, { cmd: "mapPick", x: 3, y: 15 });
+    const miscBefore = s.rng.floor.miscRng.counter;
     s = winCombat(s);
+    expect(s.rng.floor.miscRng.counter).toBe(miscBefore + 1); // hidden Act 3 boss gold roll; no reward screen
     expect(s.outcome).toBeNull();
     expect(s.run.act).toBe(4);
     expect(s.run.room?.kind).toBe("map");
