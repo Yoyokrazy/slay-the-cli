@@ -1406,21 +1406,38 @@ function buildChoiceOverlay(g: GameState, pending: PendingChoice, ui: UiState, f
   };
 }
 
-function pileTitle(pile: PileName, count: number): string {
-  const note = pile === "draw" ? " (order hidden - sorted)" : "";
+function pileTitle(g: GameState, pile: PileName, count: number): string {
+  const note = pile === "draw" ? (hasFrozenEye(g) ? " (draw order - Frozen Eye)" : " (order hidden - sorted)") : "";
   return `${titleCase(pile)} pile - ${count} card${count === 1 ? "" : "s"}${note}`;
 }
 
+function hasFrozenEye(g: GameState): boolean {
+  return g.run.relics.some((r) => r.defId === "FROZEN_EYE");
+}
+
+export function pileCardLabel(bundle: ContentBundle, card: CardInstance): string {
+  return cardName(bundle, card.defId, card.upgrades);
+}
+
 /** Cards of a combat pile in DISPLAY order (draw pile sorted by name: its
- *  real order is hidden information). Shared by the overlay list builder and
- *  the focus tooltip so the two can never disagree on ordering. */
-function pileEntries(g: GameState, pile: PileName): { iid: number; card: CardInstance }[] {
+ *  real order is hidden information unless Frozen Eye is owned). Shared by
+ *  the overlay list builder, inspect overlay, focus tooltip and control state
+ *  so they can never disagree on ordering. */
+export function pileEntries(g: GameState, bundle: ContentBundle, pile: PileName): { iid: number; card: CardInstance }[] {
   const c = g.combat;
   if (!c) return [];
   const out: { iid: number; card: CardInstance }[] = [];
   for (const iid of c.player.piles[pile]) {
     const card = c.cards[iid];
     if (card) out.push({ iid, card });
+  }
+  if (pile === "draw" && !hasFrozenEye(g)) {
+    out.sort((a, b) =>
+      pileCardLabel(bundle, a.card).localeCompare(pileCardLabel(bundle, b.card)) ||
+      (bundle.cards.get(a.card.defId)?.type ?? "?").localeCompare(bundle.cards.get(b.card.defId)?.type ?? "?") ||
+      a.card.defId.localeCompare(b.card.defId) ||
+      a.card.upgrades - b.card.upgrades ||
+      a.iid - b.iid);
   }
   return out;
 }
@@ -1485,7 +1502,7 @@ function inspectables(g: GameState, source: InspectSource, bundle: ContentBundle
     case "deck":
       return g.run.deck.map((mc, at) => masterCard(bundle, mc.defId, mc.upgrades, at));
     case "pile":
-      return pileEntries(g, source.pile).map(({ card }, at) => ({
+      return pileEntries(g, bundle, source.pile).map(({ card }, at) => ({
         kind: "card" as const,
         at,
         enter: null,
@@ -1750,21 +1767,18 @@ function buildOverlay(g: GameState, top: Overlay, ui: UiState, focusI: number | 
     }
     case "pile": {
       const c = g.combat;
-      const iids = c ? c.player.piles[top.pile] : [];
-      let rows = iids.map((iid) => {
-        const card = c?.cards[iid];
+      const count = c ? c.player.piles[top.pile].length : 0;
+      const rows = pileEntries(g, bundle, top.pile).map(({ card }) => {
         const def = card ? bundle.cards.get(card.defId) : undefined;
         return {
-          name: card ? (def?.name ?? card.defId) + (card.upgrades > 0 ? "+" : "") : `#${iid}`,
+          name: card ? pileCardLabel(bundle, card) : "?",
           cost: card ? instCostLabel(getCardCost(g, bundle, card)) : "?",
           type: def?.type ?? "?",
         };
       });
-      // draw-pile order is hidden information - present it sorted
-      if (top.pile === "draw") rows = rows.sort((a, b) => a.name.localeCompare(b.name));
       const items: RawItem[] = rows.map((r) => ({ label: `${r.name} (${r.cost}) [${r.type}]`, action: null }));
       if (items.length === 0) items.push({ label: "(empty)", enabled: false, action: null });
-      return { kind: "list", id: "pile", title: pileTitle(top.pile, iids.length), list: makeList(items, top.page, focusI) };
+      return { kind: "list", id: "pile", title: pileTitle(g, top.pile, count), list: makeList(items, top.page, focusI) };
     }
     case "potions": {
       const items: RawItem[] = g.run.potions.map((id, slot) => {
@@ -2299,7 +2313,7 @@ function overlayFocus(g: GameState, top: Overlay, overlay: OverlayView, bundle: 
       };
     }
     case "pile": {
-      const entries = pileEntries(g, top.pile);
+      const entries = pileEntries(g, bundle, top.pile);
       const e = entries[idx];
       if (!e) return { count, idx, tooltip: null };
       return {

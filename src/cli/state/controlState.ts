@@ -3,7 +3,7 @@ import type { ContentBundle } from "../../engine/content/defs";
 import { needsEnemyTarget } from "../../engine/content/targeting";
 import { getCardCost } from "../../engine/combat/preview";
 import { buildEventView, legalMapPicks } from "../text/runlogic";
-import type { View } from "./view";
+import { pileCardLabel, pileEntries, type View } from "./view";
 
 /** An allowlist, never a serialization of the engine or its save envelope. */
 export function publicGameState(game: GameState | null, bundle: ContentBundle, view: View) {
@@ -98,6 +98,11 @@ export function publicGameState(game: GameState | null, bundle: ContentBundle, v
     combat: c ? {
       turn: c.turn, energy: c.player.energy, block: c.player.block, powers: powers(c.player.powers),
       piles: { draw: c.player.piles.draw.length, discard: c.player.piles.discard.length, exhaust: c.player.piles.exhaust.length },
+      pileCards: {
+        draw: pileEntries(game, bundle, "draw").map(({ card }) => pileCardLabel(bundle, card)),
+        discard: pileEntries(game, bundle, "discard").map(({ card }) => pileCardLabel(bundle, card)),
+        exhaust: pileEntries(game, bundle, "exhaust").map(({ card }) => pileCardLabel(bundle, card)),
+      },
       hand: c.player.piles.hand.map((iid, i) => ({
         ...card(iid, i + 1), playable: combatView?.hand[i]?.playable ?? false,
         targeted: needsEnemyTarget(bundle.cards.get(c.cards[iid]?.defId ?? "")?.target),
@@ -114,26 +119,13 @@ export function publicGameState(game: GameState | null, bundle: ContentBundle, v
 
 export type PublicGameState = ReturnType<typeof publicGameState>;
 
-/** The human pile browser and unopened chest can reveal more than this API allows. */
+/** Unopened chests can reveal more than this API allows. */
 export function controlSafeView(view: View): View {
   const safe = structuredClone(view);
   if (safe.screen.kind === "treasure" && safe.screen.list.items.some(item =>
     item.action?.kind === "cmd" && item.action.cmd.cmd === "openChest")) {
     safe.screen.intro = ["Chest contents are not exposed by the control bridge."];
     safe.screen.list.items.forEach(item => { item.sub = null; });
-    safe.tooltip = null;
-  }
-  if ((safe.overlay?.kind === "list" && safe.overlay.id === "pile") ||
-      (safe.overlay?.kind === "inspect" && safe.overlay.source.of === "pile")) {
-    if (safe.overlay.kind === "list") {
-      safe.overlay.list.items.forEach(item => {
-        item.label = "Pile card (redacted)"; item.sub = null; item.note = null;
-      });
-    } else {
-      safe.overlay.name = "Pile card (redacted)";
-      safe.overlay.cost = null; safe.overlay.type = ""; safe.overlay.rules = [];
-      safe.overlay.keywords = []; safe.overlay.alt = null; safe.overlay.targeted = false;
-    }
     safe.tooltip = null;
   }
   return safe;

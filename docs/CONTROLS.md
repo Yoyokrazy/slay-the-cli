@@ -251,10 +251,12 @@ socket. Leave the environment variable unset to disable control entirely.
 
 `state` is the live, public game state, or null before a run exists. It includes
 the full public deck and map, the current hand's card IIDs, costs and upgrades,
-visible powers, living enemies and current intents, and pile counts only.
-It never serializes RNG, future rewards, encounter pools, hidden cards,
-enemy scratch data or pending continuations. Pending choices disclose the
-cards on their current visible page. Runic Dome hides intents here too.
+visible powers, living enemies and current intents, pile counts, and compact
+pile card labels. Draw-pile labels are sorted with order hidden unless Frozen
+Eye is owned; discard and exhaust labels stay in pile order. It never serializes
+RNG, future rewards, encounter pools, enemy scratch data or pending
+continuations. Pending choices disclose the cards on their current visible page.
+Runic Dome hides intents here too.
 Event screens and `room.eventView.body` include current public feedback. Match
 and Keep shows attempts left and previously revealed pairs, including after a
 mismatch turns both cards face-down. Reveal history is scoped to the current
@@ -271,9 +273,10 @@ identity, not labels or filtered list positions. Treat IDs as opaque and
 always pair them with the revision that supplied them.
 
 `screenText` is an ASCII, color-free render at the terminal's current size.
-Pile card details and unopened chest contents are deliberately redacted even
-when the human terminal shows them. Navigation still reports the actual
-overlay, page and focus.
+Unopened chest contents are deliberately redacted even when the human terminal
+shows them. Pile card overlays are visible through the bridge, with draw order
+hidden unless Frozen Eye is owned. Navigation still reports the actual overlay,
+page and focus.
 
 `POST /act` accepts exactly one action:
 

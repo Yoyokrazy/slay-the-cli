@@ -40,6 +40,35 @@ function combat(deck = Array.from({ length: 8 }, () => "STRIKE_RED")) {
   return game;
 }
 
+function arrangePiles(
+  game: GameState,
+  piles: Partial<Record<"draw" | "discard" | "exhaust", { defId: string; upgrades?: number }[]>>,
+) {
+  const c = game.combat!;
+  const available = [
+    ...c.player.piles.draw,
+    ...c.player.piles.hand,
+    ...c.player.piles.discard,
+    ...c.player.piles.exhaust,
+    ...c.player.piles.limbo,
+  ];
+  let cursor = 0;
+  for (const pile of ["draw", "discard", "exhaust"] as const) {
+    const cards = piles[pile] ?? [];
+    const iids = available.slice(cursor, cursor + cards.length);
+    if (iids.length !== cards.length) throw new Error(`Not enough card instances for ${pile}`);
+    c.player.piles[pile] = iids;
+    cards.forEach((cardSpec, i) => {
+      const card = c.cards[iids[i]!]!;
+      card.defId = cardSpec.defId;
+      card.upgrades = cardSpec.upgrades ?? 0;
+    });
+    cursor += cards.length;
+  }
+  c.player.piles.hand = available.slice(cursor);
+  c.player.piles.limbo = [];
+}
+
 function app(initial: GameState | null = null) {
   let saved = initial;
   let writes = 0;
@@ -547,27 +576,122 @@ test("settings and arbitrary operations cannot cross the bridge", () => {
   }
 });
 
-test("public allowlist excludes RNG, hidden piles, queued outcomes and internal power data", () => {
-  const game = combat();
+test("pile overlays stay visible through the control bridge", () => {
+  const game = combat(Array.from({ length: 10 }, () => "STRIKE_RED"));
+  arrangePiles(game, {
+    draw: [
+      { defId: "STRIKE_RED" },
+      { defId: "BASH", upgrades: 1 },
+      { defId: "DEFEND_RED" },
+    ],
+  });
+  const ui = {
+    ...initialUiState(),
+    screen: "run" as const,
+    overlays: [{ kind: "pile" as const, pile: "draw" as const, page: 0 }],
+    focus: { scope: "overlay", idx: 0 },
+  };
+  const view = controlSafeView(buildView(game, ui, bundle));
+  expect(view.overlay?.kind).toBe("list");
+  if (view.overlay?.kind !== "list") throw new Error("Expected pile list overlay");
+  expect(view.overlay.list.items.map(item => item.label)).toEqual([
+    "Bash+ (1) [attack]",
+    "Defend (1) [skill]",
+    "Strike (1) [attack]",
+  ]);
+  expect(JSON.stringify(view)).not.toContain("redacted");
+  expect(view.tooltip?.name).toBe("Bash+ (1)");
+
+  const inspected = controlSafeView(buildView(game, {
+    ...ui,
+    overlays: [{ kind: "inspect" as const, source: { of: "pile" as const, pile: "draw" as const }, index: 0 }],
+  }, bundle));
+  expect(inspected.overlay?.kind).toBe("inspect");
+  if (inspected.overlay?.kind !== "inspect") throw new Error("Expected pile inspect overlay");
+  expect(inspected.overlay.name).toBe("Bash+");
+});
+
+test("draw pile display order is sorted unless Frozen Eye is owned", () => {
+  const game = combat(Array.from({ length: 10 }, () => "STRIKE_RED"));
+  arrangePiles(game, {
+    draw: [
+      { defId: "STRIKE_RED" },
+      { defId: "BASH", upgrades: 1 },
+      { defId: "DEFEND_RED" },
+    ],
+  });
+  const ui = {
+    ...initialUiState(),
+    screen: "run" as const,
+    overlays: [{ kind: "pile" as const, pile: "draw" as const, page: 0 }],
+  };
+  const labels = () => {
+    const view = buildView(game, ui, bundle);
+    if (view.overlay?.kind !== "list") throw new Error("Expected pile list overlay");
+    return view.overlay.list.items.map(item => item.label);
+  };
+  expect(labels()).toEqual([
+    "Bash+ (1) [attack]",
+    "Defend (1) [skill]",
+    "Strike (1) [attack]",
+  ]);
+  expect(publicGameState(game, bundle, buildView(game, ui, bundle))?.combat?.pileCards.draw).toEqual(["Bash+", "Defend", "Strike"]);
+
+  game.run.relics.push({ defId: "FROZEN_EYE", counter: 0 });
+  expect(labels()).toEqual([
+    "Strike (1) [attack]",
+    "Bash+ (1) [attack]",
+    "Defend (1) [skill]",
+  ]);
+  expect(publicGameState(game, bundle, buildView(game, ui, bundle))?.combat?.pileCards.draw).toEqual(["Strike", "Bash+", "Defend"]);
+});
+
+test("public combat state includes compact pile card labels", () => {
+  const game = combat(Array.from({ length: 10 }, () => "STRIKE_RED"));
+  arrangePiles(game, {
+    draw: [
+      { defId: "STRIKE_RED" },
+      { defId: "BASH", upgrades: 1 },
+      { defId: "DEFEND_RED" },
+    ],
+    discard: [
+      { defId: "BASH" },
+      { defId: "STRIKE_RED" },
+    ],
+    exhaust: [
+      { defId: "WOUND" },
+      { defId: "DEFEND_RED", upgrades: 1 },
+    ],
+  });
+  const state = publicGameState(game, bundle, buildView(game, { ...initialUiState(), screen: "run" as const }, bundle));
+  expect(state?.combat?.piles).toEqual({ draw: 3, discard: 2, exhaust: 2 });
+  expect(state?.combat?.pileCards).toEqual({
+    draw: ["Bash+", "Defend", "Strike"],
+    discard: ["Bash", "Strike"],
+    exhaust: ["Wound", "Defend+"],
+  });
+});
+
+test("public allowlist excludes RNG, queued outcomes and internal power data", () => {
+  const game = combat(Array.from({ length: 10 }, () => "STRIKE_RED"));
+  arrangePiles(game, {
+    draw: [
+      { defId: "STRIKE_RED" },
+      { defId: "BASH" },
+      { defId: "DEFEND_RED" },
+    ],
+  });
   game.combat!.monsters[0]!.data.secret = "ENEMY_SECRET";
   game.run.pools.commonRelics = ["FUTURE_RELIC_SECRET"];
-  const hidden = game.combat!.player.piles.draw[0]!;
-  game.combat!.cards[hidden]!.defId = "HIDDEN_CARD_SECRET";
-  for (const iid of game.combat!.player.piles.draw) game.combat!.cards[iid]!.defId = "HIDDEN_CARD_SECRET";
   game.combat!.player.powers.push({ id: "STRENGTH", amount: 2, justApplied: false, data: { hidden: "POWER_SECRET" } });
   const ui = { ...initialUiState(), screen: "run" as const };
   const project = () => publicGameState(game, bundle, controlSafeView(buildView(game, ui, bundle)));
   const before = JSON.stringify(project());
-  for (const secret of ["ENEMY_SECRET", "FUTURE_RELIC_SECRET", "HIDDEN_CARD_SECRET", "POWER_SECRET", "\"rng\"", "\"moveHistory\"", "\"cards\":{"]) {
+  for (const secret of ["ENEMY_SECRET", "FUTURE_RELIC_SECRET", "POWER_SECRET", "\"rng\"", "\"moveHistory\"", "\"cards\":{"]) {
     expect(before).not.toContain(secret);
   }
   game.combat!.player.piles.draw.reverse();
   expect(JSON.stringify(project())).toBe(before);
-  const a = app(game);
-  const pile = a.act({ kind: "key", key: "w" });
-  expect(JSON.stringify(pile)).not.toContain("HIDDEN_CARD_SECRET");
-  expect(pile.screenText).toContain("redacted");
-  expect(JSON.stringify(a.act({ kind: "key", key: "1" }))).not.toContain("HIDDEN_CARD_SECRET");
 });
 
 test("Runic Dome hides current move in public state and unopened chests hide future rewards", () => {
