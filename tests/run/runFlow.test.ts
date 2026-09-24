@@ -16,6 +16,7 @@ import {
   NEOW_BONUS_BY_DRAWBACK,
   NEOW_TIER2_ALL,
   NEOW_DRAWBACKS,
+  applyNeowBonus,
 } from "../../src/engine/run/neow";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { seedFromString } from "../../src/engine/core/rng";
@@ -410,6 +411,28 @@ describe("Neow", () => {
     s = advance(s, { cmd: "neowPick", i: 3 }, bundle);
     expect(s.run.relics.map((r) => r.defId)).toEqual([expected]);
     expect(s.run.pools.bossRelics.length).toBe(7);
+  });
+
+  test("TEN_PERCENT_HP_BONUS raises max HP and heals by the same amount", () => {
+    const s = run("NEOWHP10", 6);
+    s.run.hp = 72;
+    s.run.maxHp = 80;
+    const { ctx } = makeTestCtx(s, bundle);
+
+    expect(applyNeowBonus(ctx, "TEN_PERCENT_HP_BONUS")).toBeNull();
+    expect(s.run.maxHp).toBe(88);
+    expect(s.run.hp).toBe(80);
+  });
+
+  test("TWENTY_PERCENT_HP_BONUS uses twice the 10% floor and heals that amount", () => {
+    const s = run("NEOWHP20");
+    s.run.hp = 50;
+    s.run.maxHp = 75;
+    const { ctx } = makeTestCtx(s, bundle);
+
+    expect(applyNeowBonus(ctx, "TWENTY_PERCENT_HP_BONUS")).toBeNull();
+    expect(s.run.maxHp).toBe(89);
+    expect(s.run.hp).toBe(64);
   });
 
   test("REMOVE_CARD opens a deck choice; choosing removes the card", () => {

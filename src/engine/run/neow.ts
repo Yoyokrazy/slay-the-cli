@@ -5,7 +5,9 @@
 
 import type { EffectCtx } from "../content/defs";
 import type { NeowBonus, NeowDrawback, NeowOptionState } from "./runState";
-import type { CardId, PotionId, RelicId } from "../core/ids";
+import { PLAYER, type CardId, type PotionId, type RelicId } from "../core/ids";
+import { foldHook } from "../core/hooks";
+import { f32mul } from "../core/math";
 import type { Rng } from "../core/rng";
 import type { RolledCard } from "./rewards";
 import { classCardPool, colorlessCardPool, cursePool, returnRandomPotion, obtainRelicFromPool } from "./rewards";
@@ -180,6 +182,12 @@ function equipRelic(ctx: EffectCtx, id: RelicId): void {
   ctx.bundle.relics.get(id)?.onEquip?.(ctx);
 }
 
+function gainMaxHp(ctx: EffectCtx, amount: number): void {
+  ctx.run.maxHp += amount;
+  const healed = Math.floor(foldHook(ctx, PLAYER, "onHeal", amount));
+  if (healed > 0) ctx.run.hp = Math.min(ctx.run.maxHp, ctx.run.hp + healed);
+}
+
 /** Apply a bonus; returns a follow-up screen request when one is needed. */
 export function applyNeowBonus(ctx: EffectCtx, bonus: NeowBonus): NeowFollowUp {
   const run = ctx.run;
@@ -231,12 +239,16 @@ export function applyNeowBonus(ctx: EffectCtx, bonus: NeowBonus): NeowFollowUp {
     case "BOSS_RELIC":
       equipRelic(ctx, obtainRelicFromPool(run, "boss"));
       return null;
-    case "TEN_PERCENT_HP_BONUS":
-      run.maxHp += Math.floor(run.maxHp * NEOW_BONUS_VALUES.TEN_PERCENT_HP_BONUS);
+    case "TEN_PERCENT_HP_BONUS": {
+      const hpBonus = Math.floor(f32mul(run.maxHp, NEOW_BONUS_VALUES.TEN_PERCENT_HP_BONUS));
+      gainMaxHp(ctx, hpBonus);
       return null;
-    case "TWENTY_PERCENT_HP_BONUS":
-      run.maxHp += Math.floor(run.maxHp * NEOW_BONUS_VALUES.TWENTY_PERCENT_HP_BONUS);
+    }
+    case "TWENTY_PERCENT_HP_BONUS": {
+      const hpBonus = Math.floor(f32mul(run.maxHp, NEOW_BONUS_VALUES.TEN_PERCENT_HP_BONUS));
+      gainMaxHp(ctx, hpBonus * 2);
       return null;
+    }
     case "HUNDRED_GOLD":
       run.gold += NEOW_BONUS_VALUES.HUNDRED_GOLD;
       return null;
