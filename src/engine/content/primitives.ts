@@ -66,7 +66,9 @@ function executePrimitive(cctx: CardCtx, def: CardDef, p: CardPrimitive): void {
           ? [PLAYER]
           : p.target === "target"
             ? [monster(cctx.target ?? 0)]
-            : cctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped).map((m) => monster(m.idx));
+            : cctx.combat!.monsters
+                .filter((m) => !m.isDead && !m.isEscaped && !m.halfDead)
+                .map((m) => monster(m.idx));
       for (const t of targets) {
         q.addToBottom({ kind: "applyPower", source: PLAYER, target: t, powerId: p.power, amount });
       }

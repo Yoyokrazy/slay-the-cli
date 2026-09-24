@@ -58,7 +58,7 @@ function winCombat(s: GameState): GameState {
   let guard = 0;
   while (s.combat && !s.outcome) {
     if (guard++ > 600) throw new Error("winCombat stuck");
-    const target = s.combat.monsters.findIndex((m) => !m.isDead && !m.isEscaped);
+    const target = s.combat.monsters.findIndex((m) => !m.isDead && !m.isEscaped && !m.halfDead);
     const energy = s.combat.player.energy;
     const atkIdx = s.combat.player.piles.hand.findIndex((iid) => {
       const def = bundle.cards.get(s.combat!.cards[iid]!.defId)!;

@@ -102,7 +102,7 @@ export function channeledCount(ctx: EffectCtx, orbId: string): number {
 // ------------------------------------------------------------------------------
 
 function aliveMonsters(ctx: EffectCtx) {
-  return ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped);
+  return ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped && !m.halfDead);
 }
 
 function randomAliveIdx(ctx: EffectCtx): number | null {

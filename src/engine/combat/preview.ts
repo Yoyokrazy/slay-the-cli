@@ -54,7 +54,7 @@ export function getCardPlayability(
     return { cost, playable: false };
   }
   const targets = needsEnemyTarget(def.target)
-    ? combat.monsters.flatMap((m, i) => m.isDead || m.isEscaped ? [] : [i])
+    ? combat.monsters.flatMap((m, i) => m.isDead || m.isEscaped || m.halfDead ? [] : [i])
     : [null];
   const usable = targets.some(target => !def.canUse || def.canUse({
     ...ctx, card: c, target, energyOnUse: combat.player.energy, upgraded: c.upgrades > 0,

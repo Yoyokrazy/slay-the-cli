@@ -657,7 +657,7 @@ function cursorEnemyIdx(c: CombatState, handCount: number, screenFocus: number |
   if (screenFocus === null) return null;
   const alive: number[] = [];
   c.monsters.forEach((m, idx) => {
-    if (!m.isDead && !m.isEscaped) alive.push(idx);
+    if (!m.isDead && !m.isEscaped && !m.halfDead) alive.push(idx);
   });
   const k = screenFocus - handCount;
   return k >= 0 && k < alive.length ? (alive[k] ?? null) : null;
@@ -891,7 +891,7 @@ function buildCombat(g: GameState, ui: UiState, bundle: ContentBundle, screenFoc
   }
   // previews aim at the enemy under the cursor when there is one, else at the
   // first living target - the same monster a click would hit by default
-  const firstAlive = c.monsters.findIndex((m) => !m.isDead && !m.isEscaped);
+  const firstAlive = c.monsters.findIndex((m) => !m.isDead && !m.isEscaped && !m.halfDead);
   const cursorEnemy = cursorEnemyIdx(c, c.player.piles.hand.length, screenFocus);
   const previewTarget = cursorEnemy ?? (firstAlive === -1 ? 0 : firstAlive);
   const previews = getCardPreviews(g, bundle, previewTarget);
@@ -1864,7 +1864,7 @@ function buildTargeting(g: GameState, ui: UiState, bundle: ContentBundle): Targe
   };
   const targets = g.combat.monsters
     .map((m, idx) => ({ m, idx }))
-    .filter(({ m }) => !m.isDead && !m.isEscaped)
+    .filter(({ m }) => !m.isDead && !m.isEscaped && !m.halfDead)
     .map(({ m, idx }) => ({
       key: keyFor(no++) ?? "?",
       name: toAscii(bundle.monsters.get(m.id)?.name ?? titleCase(m.id)),
@@ -2146,7 +2146,7 @@ function combatFocus(g: GameState, ui: UiState, bundle: ContentBundle, accent: s
   const c = g.combat;
   if (!c) return NO_FOCUS;
   const hand = c.player.piles.hand;
-  const alive = c.monsters.map((m, i) => ({ m, i })).filter(({ m }) => !m.isDead && !m.isEscaped);
+  const alive = c.monsters.map((m, i) => ({ m, i })).filter(({ m }) => !m.isDead && !m.isEscaped && !m.halfDead);
   const relics = g.run.relics;
   const potions = g.run.potions.map((id, slot) => ({ id, slot })).filter((p) => p.id !== null);
   const orbs = c.player.orbs.filter((o) => o != null);
@@ -2233,7 +2233,7 @@ function combatFocus(g: GameState, ui: UiState, bundle: ContentBundle, accent: s
 
 function targetingFocus(g: GameState, bundle: ContentBundle, targeting: TargetingView): FocusInfo {
   const alive = g.combat
-    ? g.combat.monsters.map((m, i) => ({ m, i })).filter(({ m }) => !m.isDead && !m.isEscaped)
+    ? g.combat.monsters.map((m, i) => ({ m, i })).filter(({ m }) => !m.isDead && !m.isEscaped && !m.halfDead)
     : [];
   const count = targeting.targets.length;
   if (count === 0) return NO_FOCUS;

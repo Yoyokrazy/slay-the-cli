@@ -6,7 +6,7 @@
 // Life Link / revive cycle: on death, if any OTHER Darkling is still truly
 // alive, this one becomes halfDead (untargetable corpse) and revives at 50%
 // max HP two of its turns later (REGROW turn, then REINCARNATE) - driven by
-// the REGROW power's atEndOfRound hook, since the engine skips halfDead
+// hidden DARKLING_REGROW_DRIVER bookkeeping, since the engine skips halfDead
 // monsters in the monster phase. Killing the last living Darkling wins the
 // fight even while others are regrowing (the corpses die for real).
 // ENGINE-GAP: the reference rolls Nip damage during construction interleaved
@@ -69,8 +69,8 @@ export const darkling: MonsterDef = {
       // only reached when it dies during its own turn (thorns): the engine
       // still rolls after the move; the corpus forces REINCARNATE while
       // halfDead - REGROW is shown while more than one revive turn remains.
-      const regrow = self.powers.find((p) => p.id === "REGROW");
-      const ticks = (regrow?.data?.ticks as number | undefined) ?? 0;
+      const driver = self.powers.find((p) => p.id === "DARKLING_REGROW_DRIVER");
+      const ticks = (driver?.data?.ticks as number | undefined) ?? 0;
       return ticks > 1 ? REGROW : REINCARNATE;
     }
     if (firstTurn(self)) return roll < 50 ? HARDEN : NIP;
@@ -106,17 +106,13 @@ export const darkling: MonsterDef = {
     self.halfDead = true;
     if (self.data.regrowing) return; // repeat damage on the corpse: no state reset
     self.data.regrowing = true;
-    // Monster::die with REGROW: clears ALL statuses and Strength (the REGROW
-    // life-link marker survives as the revive driver), block already 0.
-    self.powers = self.powers.filter((p) => p.id === "REGROW");
-    let regrow = self.powers.find((p) => p.id === "REGROW");
-    if (!regrow) {
-      regrow = { id: "REGROW", amount: 1, justApplied: false, data: null };
-      self.powers.push(regrow);
-    }
+    // Darkling.damage calls powers.clear(): all visible statuses and Regrow
+    // are wiped while the corpse waits to reincarnate. The hidden driver keeps
+    // the port's end-of-round countdown without showing a power on the corpse.
+    self.powers = [{ id: "DARKLING_REGROW_DRIVER", amount: 1, justApplied: false, data: null }];
     // end-of-rounds until revive: REGROW turn + REINCARNATE turn (one more
     // when it died during its own turn, which already passed this round)
-    regrow.data = { ticks: combat.playerTurn ? 2 : 3 };
+    self.powers[0]!.data = { ticks: combat.playerTurn ? 2 : 3 };
     replaceIntent(self, REGROW);
   },
 };

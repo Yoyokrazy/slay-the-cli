@@ -23,7 +23,7 @@ function throughNeow(b: typeof stub, s: GameState): GameState {
 function winCombat(b: typeof stub, s: GameState, guard = 300): GameState {
   while (s.combat && s.run.room?.kind === "combat" && guard-- > 0) {
     const c = s.combat;
-    const alive = c.monsters.find((m) => !m.isDead && !m.isEscaped);
+    const alive = c.monsters.find((m) => !m.isDead && !m.isEscaped && !m.halfDead);
     const handIdx = c.player.piles.hand.findIndex((iid) => {
       const card = c.cards[iid]!;
       return b.cards.get(card.defId)!.type === "attack" && c.player.energy >= card.costForTurn;
@@ -135,7 +135,7 @@ describe("A20: double act-3 boss", () => {
     let guard = 400;
     while (s.combat && s.run.room?.kind === "combat" && guard-- > 0) {
       const c = s.combat;
-      const alive = c.monsters.find((m) => !m.isDead && !m.isEscaped);
+      const alive = c.monsters.find((m) => !m.isDead && !m.isEscaped && !m.halfDead);
       const handIdx = c.player.piles.hand.findIndex((iid) => {
         const card = c.cards[iid]!;
         return stub.cards.get(card.defId)!.type === "attack" && c.player.energy >= card.costForTurn;

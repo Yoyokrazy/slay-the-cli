@@ -267,7 +267,7 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
       if (needsEnemyTarget(def.target)) {
         if (cmd.target === undefined) throw new Error("target required");
         const t = combat.monsters[cmd.target];
-        if (!t || t.isDead || t.isEscaped) throw new Error("invalid target");
+        if (!t || t.isDead || t.isEscaped || t.halfDead) throw new Error("invalid target");
       }
       const cctx = { ...ctx, card: c, target: cmd.target ?? null, energyOnUse: combat.player.energy, upgraded: c.upgrades > 0 };
       if (def.canUse && !def.canUse(cctx)) throw new Error("card cannot be used now");
@@ -317,7 +317,7 @@ export function advance(prev: GameState, cmd: Command, bundle: ContentBundle): G
         if (!state.combat) throw new Error("targeted potions require combat");
         if (cmd.target === undefined) throw new Error("target required");
         const t = state.combat.monsters[cmd.target];
-        if (!t || t.isDead || t.isEscaped) throw new Error("invalid target");
+        if (!t || t.isDead || t.isEscaped || t.halfDead) throw new Error("invalid target");
       }
       // refused, not spent: the slot keeps the potion
       const blocked = potionUseBlockedReason(def, ctx);

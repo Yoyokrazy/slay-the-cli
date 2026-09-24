@@ -57,7 +57,7 @@ function throughNeow(s: GameState): GameState {
 function winCombat(s: GameState, guard = 200): GameState {
   while (s.combat && s.run.room?.kind === "combat" && guard-- > 0) {
     const c = s.combat;
-    const alive = c.monsters.find((m) => !m.isDead && !m.isEscaped);
+    const alive = c.monsters.find((m) => !m.isDead && !m.isEscaped && !m.halfDead);
     const handIdx = c.player.piles.hand.findIndex((iid) => {
       const card = c.cards[iid]!;
       const def = bundle.cards.get(card.defId)!;

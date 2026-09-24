@@ -107,12 +107,17 @@ export function publicGameState(game: GameState | null, bundle: ContentBundle, v
         ...card(iid, i + 1), playable: combatView?.hand[i]?.playable ?? false,
         targeted: needsEnemyTarget(bundle.cards.get(c.cards[iid]?.defId ?? "")?.target),
       })),
-      enemies: c.monsters.flatMap((m, index) => m.id === "GAP" || m.isDead || m.isEscaped ? [] : [{
-        index, id: m.id, hp: m.hp, maxHp: m.maxHp, block: m.block, halfDead: m.halfDead,
-        intent: hideIntents ? null : m.move,
-        intentView: hideIntents ? null : combatView?.enemies[c.monsters.slice(0, index).filter(m => m.id !== "GAP").length]?.intent ?? null,
-        powers: powers(m.powers),
-      }]).map((m, i) => ({ slot: i + 1, ...m })),
+      // Half-dead corpses stay visible (regrow timing matters) but get no target slot.
+      enemies: (() => {
+        let slot = 0;
+        return c.monsters.flatMap((m, index) => m.id === "GAP" || m.isDead || m.isEscaped ? [] : [{
+          slot: m.halfDead ? null : ++slot,
+          index, id: m.id, hp: m.hp, maxHp: m.maxHp, block: m.block, halfDead: m.halfDead,
+          intent: hideIntents ? null : m.move,
+          intentView: hideIntents ? null : combatView?.enemies[c.monsters.slice(0, index).filter(m => m.id !== "GAP").length]?.intent ?? null,
+          powers: powers(m.powers),
+        }]);
+      })(),
     } : null,
   };
 }

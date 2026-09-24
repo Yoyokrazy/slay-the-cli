@@ -59,6 +59,8 @@ export function executeAction(ctx: EffectCtx, a: GameAction): void {
       break;
     case "damageAllMonsters": {
       for (let i = 0; i < ctx.combat!.monsters.length; i++) {
+        const m = ctx.combat!.monsters[i];
+        if (!m || m.isDead || m.isEscaped || m.halfDead) continue;
         const amount = a.amounts[i] ?? a.amounts[0] ?? 0;
         applyDamage(ctx, monster(i), { ...a.info, amount });
       }
@@ -184,7 +186,7 @@ function applyDamage(ctx: EffectCtx, target: ActorRef, info: DamageInfo): void {
 
   if (target.kind === "monster") {
     const m = ctx.combat!.monsters[target.idx];
-    if (!m || m.isDead || m.isEscaped) return;
+    if (!m || m.isDead || m.isEscaped || m.halfDead) return;
     if (info.type !== "hpLoss" && m.block > 0) {
       const blocked = Math.min(m.block, d);
       m.block -= blocked;

@@ -223,7 +223,7 @@ export function resolveControl(action: ControlAction, game: GameState | null, ui
     if (!card.playable) throw new Error("DISABLED: card is not playable");
     const instance = game.combat.cards[action.iid];
     const targeted = needsEnemyTarget(instance ? bundle.cards.get(instance.defId)?.target : undefined);
-    const alive = game.combat.monsters.map((m, i) => ({ m, i })).filter(({ m }) => m.id !== "GAP" && !m.isDead && !m.isEscaped);
+    const alive = game.combat.monsters.map((m, i) => ({ m, i })).filter(({ m }) => m.id !== "GAP" && !m.isDead && !m.isEscaped && !m.halfDead);
     if (!targeted && action.target !== undefined) throw new Error("INVALID_TARGET: card does not target an enemy");
     const target = targeted ? action.target ?? (alive.length === 1 ? 1 : undefined) : undefined;
     if (targeted && (target === undefined || !alive[target - 1])) throw new Error("INVALID_TARGET: choose a current living enemy slot");

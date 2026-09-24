@@ -2,7 +2,10 @@
 // against data/corpus/monsters-act34.json + data/corpus/powers.json.
 //
 // Notes / adjudications:
-//  - REGROW (wiki: Life Link) is the Darkling revive driver. The engine skips
+//  - DARKLING_REGROW_DRIVER is hidden bookkeeping for the Darkling revive
+//    countdown. The visible REGROW power is cleared when a Darkling goes
+//    half-dead and re-applied after Reincarnate, matching the reference.
+//    The engine skips
 //    halfDead monsters in the monster phase, so the regrow/reincarnate turns
 //    are driven from atEndOfRound (fired for halfDead monsters too); each
 //    half-dead "turn" consumes one aiRng.random(99) for stream parity.
@@ -35,15 +38,24 @@ import { setIntent } from "../monsters/act34/_shared";
 
 export const act34MonsterPowers: PowerDef[] = [
   {
-    // Darkling Life Link driver (lightspeed models it as the REGROW status).
-    // data.ticks (set by Darkling.onDeath) counts remaining end-of-rounds:
-    // ticks>1 -> REGROW turn (nothing), ticks==1 -> REINCARNATE intent,
-    // ticks==0 -> revive at 50% max HP and roll a real move.
     id: "REGROW",
     name: "Regrow",
     kind: "buff",
     stacking: "none",
     turnBased: false,
+    hooks: {},
+  },
+  {
+    // Darkling Life Link driver (lightspeed models it as the REGROW status).
+    // data.ticks (set by Darkling.onDeath) counts remaining end-of-rounds:
+    // ticks>1 -> REGROW turn (nothing), ticks==1 -> REINCARNATE intent,
+    // ticks==0 -> revive at 50% max HP and roll a real move.
+    id: "DARKLING_REGROW_DRIVER",
+    name: "Darkling Regrow Driver",
+    kind: "buff",
+    stacking: "none",
+    turnBased: false,
+    hidden: true,
     hooks: {
       atEndOfRound: (ctx) => {
         if (ctx.owner.kind !== "monster") return;
@@ -58,11 +70,13 @@ export const act34MonsterPowers: PowerDef[] = [
           setIntent(m, left === 1 ? "DARKLING_REINCARNATE" : "DARKLING_REGROW");
           return;
         }
-        // REINCARNATE: curHp = maxHp/2, halfDead=false, +1 Str with
-        // Philosopher's Stone, then rollMove immediately.
+        // REINCARNATE: curHp = maxHp/2, halfDead=false, visible Regrow is
+        // re-applied, +1 Str with Philosopher's Stone, then rollMove.
         m.hp = Math.floor(m.maxHp / 2);
         m.halfDead = false;
         delete m.data.regrowing;
+        removePower(ctx, monster(m.idx), "DARKLING_REGROW_DRIVER");
+        applyPower(ctx, monster(m.idx), monster(m.idx), "REGROW", 1);
         if (hasRelic(ctx, "PHILOSOPHERS_STONE")) {
           applyPower(ctx, monster(m.idx), monster(m.idx), "STRENGTH", 1);
         }

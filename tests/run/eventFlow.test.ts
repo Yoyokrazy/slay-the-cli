@@ -49,7 +49,7 @@ function policyStep(s: GameState): GameState {
     }
     case "combat": {
       // tolerant attack bot (handles Entangled etc.)
-      const target = s.combat!.monsters.findIndex((m) => !m.isDead && !m.isEscaped);
+      const target = s.combat!.monsters.findIndex((m) => !m.isDead && !m.isEscaped && !m.halfDead);
       const energy = s.combat!.player.energy;
       const atkIdx = s.combat!.player.piles.hand.findIndex((iid) => {
         const def = bundle.cards.get(s.combat!.cards[iid]!.defId)!;
@@ -177,7 +177,7 @@ describe("combat events round-trip", () => {
     expect(s.combat).not.toBeNull();
     let guard = 0;
     while (s.combat && !s.outcome && guard++ < 400) {
-      const target = s.combat.monsters.findIndex((m) => !m.isDead && !m.isEscaped);
+      const target = s.combat.monsters.findIndex((m) => !m.isDead && !m.isEscaped && !m.halfDead);
       const energy = s.combat.player.energy;
       const atkIdx = s.combat.player.piles.hand.findIndex((iid) => {
         const def = bundle.cards.get(s.combat!.cards[iid]!.defId)!;

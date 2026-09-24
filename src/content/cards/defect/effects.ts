@@ -21,7 +21,7 @@ import { orbEffects, trackedChannel, trackedEvoke } from "../../orbs";
 // ------------------------------------------------------------------------------
 
 function aliveMonsters(ctx: EffectCtx) {
-  return ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped);
+  return ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped && !m.halfDead);
 }
 
 function randomAliveIdx(ctx: EffectCtx): number | null {

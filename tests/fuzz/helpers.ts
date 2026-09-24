@@ -54,7 +54,7 @@ export function legalCommands(s: GameState, bundle: ContentBundle): Command[] {
     emit: () => {},
     requestChoice: () => {},
   };
-  const aliveMonsters = combat.monsters.filter((m) => !m.isDead && !m.isEscaped).map((m) => m.idx);
+  const aliveMonsters = combat.monsters.filter((m) => !m.isDead && !m.isEscaped && !m.halfDead).map((m) => m.idx);
   combat.player.piles.hand.forEach((iid, handIdx) => {
     const c = combat.cards[iid]!;
     const def = bundle.cards.get(c.defId);

@@ -33,7 +33,7 @@ export function autoWinCombat(s: GameState, bundle: ContentBundle): GameState {
   let guard = 0;
   while (s.combat && !s.outcome) {
     if (guard++ > 400) throw new Error("autoWinCombat stuck");
-    const target = s.combat.monsters.findIndex((m) => !m.isDead && !m.isEscaped);
+    const target = s.combat.monsters.findIndex((m) => !m.isDead && !m.isEscaped && !m.halfDead);
     const names = handNames(s);
     const energy = s.combat.player.energy;
     const atkIdx = names.findIndex((n) => {

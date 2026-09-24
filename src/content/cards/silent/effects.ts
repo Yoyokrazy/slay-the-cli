@@ -79,7 +79,7 @@ function chooseOne(
 }
 
 function aliveMonsters(ctx: EffectCtx) {
-  return ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped);
+  return ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped && !m.halfDead);
 }
 
 // ------------------------------------------------------------------------------

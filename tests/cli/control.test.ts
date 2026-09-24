@@ -231,6 +231,20 @@ test("semantic combat play resolves a visible slot to original living enemy inde
   expect(a.term.output.at(-1)).toContain("\x1b[?2026h");
 });
 
+test("half-dead corpses stay visible without a slot, and target slots skip them", () => {
+  const game = combat();
+  game.combat!.monsters[0]!.halfDead = true;
+  game.combat!.monsters[0]!.hp = 0;
+  const a = app(game);
+  const before = a.port.snapshot();
+  expect(before.state?.combat?.enemies.map(e => [e.index, e.slot, e.halfDead])).toEqual([[0, null, true], [1, 1, false], [2, 2, false]]);
+  const iid = before.state!.combat!.hand[0]!.iid;
+  const played = a.act({ kind: "play", iid, target: 2 });
+  expect(played.ok).toBe(true);
+  expect(played.state!.combat!.enemies[1]!.hp).toBe(before.state!.combat!.enemies[1]!.hp);
+  expect(played.state!.combat!.enemies[2]!.hp).toBeLessThan(before.state!.combat!.enemies[2]!.hp);
+});
+
 test("Corruption costs agree across hand, inspect, public state and zero-energy play", () => {
   const game = createCombatGame({
     seed: "COST-TEST", bundle, character: "IRONCLAD",

@@ -59,6 +59,16 @@ const SEEDS = Array.from({ length: 20 }, (_, i) => `A34S${i}`);
 const defendDeck = Array(10).fill({ defId: "DEFEND_RED" });
 const strikeDeck = Array(10).fill({ defId: "STRIKE_RED" });
 const nukeDeck = Array(10).fill({ defId: "T_NUKE" });
+const shockwaveAfterNukeDeck = [
+  { defId: "T_NUKE" },
+  { defId: "SHOCKWAVE" },
+  ...Array(8).fill({ defId: "DEFEND_RED" }),
+];
+const cleaveAfterNukeDeck = [
+  { defId: "T_NUKE" },
+  { defId: "CLEAVE" },
+  ...Array(8).fill({ defId: "DEFEND_RED" }),
+];
 
 interface FightOpts {
   seed?: string;
@@ -84,6 +94,16 @@ function fight(monsters: string[], opts: FightOpts = {}): GameState {
 }
 
 const endTurn = (s: GameState): GameState => advance(s, { cmd: "endTurn" }, bundle);
+const handNames = (s: GameState): string[] => s.combat!.player.piles.hand.map((iid) => s.combat!.cards[iid]!.defId);
+
+function fightWithInHand(want: string[], monsters: string[], opts: FightOpts = {}): GameState {
+  for (const seed of ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"]) {
+    const s = fight(monsters, { ...opts, seed });
+    const names = handNames(s);
+    if (want.every((w) => names.includes(w))) return s;
+  }
+  throw new Error(`no seed put ${want.join(",")} in the opening hand`);
+}
 
 function play(s: GameState, name: string, target?: number): GameState {
   const idx = s.combat!.player.piles.hand.findIndex((iid) => s.combat!.cards[iid]!.defId === name);
@@ -97,10 +117,18 @@ function usePotion(s: GameState, slot: number, target: number): GameState {
 
 const mon = (s: GameState, idx = 0) => s.combat!.monsters[idx]!;
 const monPower = (s: GameState, idx: number, id: string) => mon(s, idx).powers.find((p) => p.id === id);
+const visiblePowerIds = (s: GameState, idx: number) =>
+  mon(s, idx).powers.filter((p) => bundle.powers.get(p.id)?.hidden !== true).map((p) => p.id);
 const playerPower = (s: GameState, id: string) => s.combat!.player.powers.find((p) => p.id === id);
 const countCards = (s: GameState, defId: string) =>
   Object.values(s.combat!.cards).filter((c) => c.defId === defId).length;
 const won = (s: GameState) => s.eventLog.some((e) => e.event === "combatEnded");
+const damagedMonster = (s: GameState, idx: number) =>
+  s.eventLog.some((e) => {
+    if (e.event !== "damaged") return false;
+    const payload = e.payload as { target?: { kind?: string; idx?: number } };
+    return payload.target?.kind === "monster" && payload.target.idx === idx;
+  });
 
 function expectHpRange(monsterId: string, asc: number, lo: number, hi: number): void {
   for (const seed of SEEDS.slice(0, 6)) {
@@ -262,6 +290,42 @@ describe("Darkling", () => {
     expect(sawSideChomp).toBe(true);
   });
 
+  test("Shockwave does not apply Weak or Vulnerable to a half-dead Darkling", () => {
+    let s = fightWithInHand(["T_NUKE", "SHOCKWAVE"], ["DARKLING", "DARKLING", "DARKLING"], {
+      deck: shockwaveAfterNukeDeck,
+    });
+    s = play(s, "T_NUKE", 0);
+    expect(mon(s, 0).halfDead).toBe(true);
+    expect(visiblePowerIds(s, 0)).toEqual([]);
+
+    s = play(s, "SHOCKWAVE");
+
+    expect(monPower(s, 0, "WEAK")).toBeUndefined();
+    expect(monPower(s, 0, "VULNERABLE")).toBeUndefined();
+    expect(visiblePowerIds(s, 0)).toEqual([]);
+    for (const idx of [1, 2]) {
+      expect(monPower(s, idx, "WEAK")?.amount).toBe(3);
+      expect(monPower(s, idx, "VULNERABLE")?.amount).toBe(3);
+    }
+  });
+
+  test("Cleave does not damage a half-dead Darkling", () => {
+    let s = fightWithInHand(["T_NUKE", "CLEAVE"], ["DARKLING", "DARKLING", "DARKLING"], {
+      deck: cleaveAfterNukeDeck,
+    });
+    s = play(s, "T_NUKE", 0);
+    expect(mon(s, 0).halfDead).toBe(true);
+    expect(mon(s, 0).hp).toBe(0);
+
+    s = play(s, "CLEAVE");
+
+    expect(mon(s, 0).halfDead).toBe(true);
+    expect(mon(s, 0).hp).toBe(0);
+    expect(damagedMonster(s, 0)).toBe(false);
+    expect(damagedMonster(s, 1)).toBe(true);
+    expect(damagedMonster(s, 2)).toBe(true);
+  });
+
   test("revive cycle: killed Darkling is a half-dead corpse, Regrow -> Reincarnate -> back at 50% max HP", () => {
     let s = fight(["DARKLING", "DARKLING", "DARKLING"], { seed: "REGROW", deck: nukeDeck });
     const maxHp = mon(s, 0).maxHp;
@@ -271,7 +335,7 @@ describe("Darkling", () => {
     expect(mon(s, 0).halfDead).toBe(true);
     expect(mon(s, 0).hp).toBe(0);
     expect(mon(s, 0).move).toBe("DARKLING_REGROW");
-    expect(mon(s, 0).powers.map((p) => p.id)).toEqual(["REGROW"]); // statuses/strength wiped
+    expect(visiblePowerIds(s, 0)).toEqual([]); // statuses, Strength, and visible Regrow wiped
     s = endTurn(s); // its Regrow turn passes
     expect(mon(s, 0).halfDead).toBe(true);
     expect(mon(s, 0).move).toBe("DARKLING_REINCARNATE");
@@ -279,6 +343,7 @@ describe("Darkling", () => {
     expect(mon(s, 0).halfDead).toBe(false);
     expect(mon(s, 0).isDead).toBe(false);
     expect(mon(s, 0).hp).toBe(Math.floor(maxHp / 2));
+    expect(monPower(s, 0, "REGROW")?.amount).toBe(1);
     expect(["DARKLING_NIP", "DARKLING_CHOMP", "DARKLING_HARDEN"]).toContain(mon(s, 0).move!);
   });
 
@@ -969,10 +1034,7 @@ describe("Awakened One", () => {
     expect(ao.move).toBe("AWAKENED_ONE_REBIRTH");
     expect(monPower(s, 2, "CURIOSITY")).toBeUndefined();
     expect(monPower(s, 2, "REGENERATE")).toBeDefined(); // buff persists
-    // hitting the corpse again is harmless
-    s = play(s, "T_NUKE", 2);
-    expect(mon(s, 2).halfDead).toBe(true);
-    expect(won(s)).toBe(false);
+    expect(() => play(s, "T_NUKE", 2)).toThrow("invalid target");
     s = endTurn(s); // its Rebirth turn passes -> revived
     expect(mon(s, 2).halfDead).toBe(false);
     expect(mon(s, 2).hp).toBe(300);

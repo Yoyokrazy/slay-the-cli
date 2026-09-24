@@ -63,6 +63,11 @@ export function applyPower(
   powerId: string,
   amount: number,
 ): void {
+  if (target.kind === "monster") {
+    const m = ctx.combat!.monsters[target.idx];
+    if (!m || m.isDead || m.isEscaped || m.halfDead) return;
+  }
+
   const def = ctx.bundle.powers.get(powerId);
   if (!def) throw new Error(`unknown power: ${powerId}`);
   const powers = powersOf(ctx, target);
