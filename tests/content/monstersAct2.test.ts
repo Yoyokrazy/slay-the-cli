@@ -563,6 +563,31 @@ describe("Centurion & Mystic", () => {
     expectMoveDamage("CENTURION", "CENTURION_FURY", 7, 3, { asc: 2 });
   });
 
+  test("Centurion stale Defend self-blocks if Mystic dies before execution", () => {
+    for (const [asc, block] of [
+      [0, 15],
+      [17, 20],
+    ] as const) {
+      let found = false;
+      for (const seed of SEEDS) {
+        let s = fight(["CENTURION", "MYSTIC"], { seed, asc });
+        for (let t = 0; t < 6; t++) {
+          if (mon(s, 0).move === "CENTURION_DEFEND") {
+            mon(s, 1).isDead = true;
+            mon(s, 1).hp = 0;
+            s = endTurn(s);
+            expect(mon(s, 0).block).toBe(block);
+            found = true;
+            break;
+          }
+          s = endTurn(s);
+        }
+        if (found) break;
+      }
+      expect(found).toBe(true);
+    }
+  });
+
   test("Centurion Slash 12 (A2: 14); history: no move 3x in a row", () => {
     expectMoveDamage("CENTURION", "CENTURION_SLASH", 12);
     expectMoveDamage("CENTURION", "CENTURION_SLASH", 14, 1, { asc: 2 });
@@ -572,7 +597,7 @@ describe("Centurion & Mystic", () => {
     }
   });
 
-  test("Mystic heals the pair when either is missing >= 16 HP (heals 16; capped at max)", () => {
+  test("Mystic heals the pair when total missing HP is >= 16 (A17: >= 21)", () => {
     let s = fight(["CENTURION", "MYSTIC"], { seed: "HEALME", deck: strikeDeck });
     while (canPlay(s, "STRIKE_RED")) s = play(s, "STRIKE_RED", 0); // 18 damage on the Centurion
     expect(mon(s, 0).maxHp - mon(s, 0).hp).toBeGreaterThanOrEqual(16);
@@ -582,6 +607,34 @@ describe("Centurion & Mystic", () => {
     s = endTurn(s);
     expect(mon(s, 0).hp - cHp).toBe(16);
     expect(mon(s, 1).hp).toBe(mon(s, 1).maxHp); // self-heal capped
+
+    s = fight(["CENTURION", "MYSTIC"], { seed: "SPLITHEAL" });
+    mon(s, 0).hp = mon(s, 0).maxHp - 10;
+    mon(s, 1).hp = mon(s, 1).maxHp - 6;
+    mon(s, 1).move = "MYSTIC_BUFF";
+    s = endTurn(s);
+    expect(mon(s, 1).move).toBe("MYSTIC_HEAL");
+
+    s = fight(["CENTURION", "MYSTIC"], { seed: "A17HEAL", asc: 17 });
+    mon(s, 0).hp = mon(s, 0).maxHp - 20;
+    mon(s, 1).move = "MYSTIC_BUFF";
+    s = endTurn(s);
+    expect(mon(s, 1).move).not.toBe("MYSTIC_HEAL");
+    mon(s, 0).hp = mon(s, 0).maxHp - 21;
+    mon(s, 1).move = "MYSTIC_BUFF";
+    s = endTurn(s);
+    expect(mon(s, 1).move).toBe("MYSTIC_HEAL");
+  });
+
+  test("Mystic Heal has a lastTwoMoves gate", () => {
+    let s = fight(["CENTURION", "MYSTIC"], { seed: "HEALGATE" });
+    mon(s, 0).hp = 1;
+    mon(s, 1).hp = 1;
+    mon(s, 1).move = "MYSTIC_BUFF";
+    mon(s, 1).moveHistory = ["MYSTIC_HEAL", "MYSTIC_HEAL"];
+    s = endTurn(s);
+    expect(mon(s, 1).maxHp - mon(s, 1).hp + mon(s, 0).maxHp - mon(s, 0).hp).toBeGreaterThanOrEqual(16);
+    expect(mon(s, 1).move).not.toBe("MYSTIC_HEAL");
   });
 
   test("Mystic Buff Strength 2 (A2: 3, A17: 4); Attack/Debuff 8 + Frail 2 (A2: 9)", () => {

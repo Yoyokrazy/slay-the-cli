@@ -3,11 +3,11 @@
 //
 // CONFLICT HONORED (Centurion hp.asc): [78,83] at A7+ per spire-archive+wiki
 // majority (lightspeed's 76 min is a transcription error).
-// CONFLICT HONORED (Centurion DEFEND when alone): lightspeed transcription -
-// the move is a no-op if the Mystic is dead at execution time (the real game's
-// self-block variant is only reachable through a stale intent).
-// CONFLICT HONORED (Mystic heal repeat): no lastTwoMoves gate on HEAL
-// (lightspeed, seed-validated; the wiki's "up to twice in a row" is dropped).
+// CONFLICT HONORED (Centurion DEFEND stale intent): real game's
+// GainBlockRandomMonsterAction falls back to the Centurion when no other
+// non-dying monster remains.
+// CONFLICT HONORED (Mystic heal repeat): real game has a lastTwoMoves gate on
+// HEAL despite lightspeed/wiki disagreement.
 // CONFLICT HONORED (Mystic heal threshold): missing >= 16, switching to >= 21
 // at A17 together with the 16 -> 20 heal amount (lightspeed; not the wiki A19).
 
@@ -39,13 +39,12 @@ export const centurion: MonsterDef = {
     CENTURION_DEFEND: {
       id: DEFEND,
       intent: "defend",
-      execute: (ctx, _self) => {
-        if (aliveCount(ctx) <= 1) return; // no-op when alone (see header)
+      execute: (ctx, self) => {
         const ally = ctx.combat!.monsters[1];
-        if (!ally || ally.isDead || ally.isEscaped) return;
+        const target = ally && !ally.isDead && !ally.isEscaped ? ally : self;
         ctx.queue.addToBottom({
           kind: "gainBlock",
-          target: monster(ally.idx),
+          target: monster(target.idx),
           amount: ctx.asc >= 17 ? 20 : 15,
           fromCard: false,
         });
@@ -120,13 +119,10 @@ export const mystic: MonsterDef = {
   getMove: (ctx, self, roll) => {
     // note: the A17 heal TRIGGER threshold is 21 while the heal amount is 20
     const healNeed = ctx.asc >= 17 ? 21 : 16;
-    const knight = ctx.combat!.monsters[0];
-    const knightNeedsHeal =
-      knight !== undefined &&
-      !knight.isDead &&
-      !knight.isEscaped &&
-      knight.maxHp - knight.hp >= healNeed;
-    if (self.maxHp - self.hp >= healNeed || knightNeedsHeal) return HEAL;
+    const needToHeal = ctx.combat!.monsters
+      .filter((m) => !m.isDead && !m.isEscaped)
+      .reduce((sum, m) => sum + (m.maxHp - m.hp), 0);
+    if (needToHeal >= healNeed && !lastTwoMovesWere(self, HEAL)) return HEAL;
     const debuffGate =
       ctx.asc >= 17 ? lastMove(self) !== ATTACK_DEBUFF : !lastTwoMovesWere(self, ATTACK_DEBUFF);
     if (roll >= 40 && debuffGate) return ATTACK_DEBUFF;
