@@ -1,9 +1,9 @@
 // Gremlin Nob - exact port from data/corpus/monsters-act1.json (GREMLIN_NOB).
 // Turn 1 always Bellow (ENRAGE 2; asc>=18: 3 - +Strength whenever the player
 // plays a Skill). asc<18: 33% Skull Bash / 67% Rush with Rush never 3x in a row.
-// CONFLICT HONORED (asc>=18): lightspeed's branch degenerates to Rush-forever;
-// per the wiki/real game the pattern is Bellow, then repeating
-// [Skull Bash, Rush, Rush] - Skull Bash whenever absent from the last two moves.
+// CONFLICT HONORED (asc>=18): Java GremlinNob.java:115-134 branches to Skull
+// Bash whenever absent from the last two moves, producing Bellow then repeating
+// [Skull Bash, Rush, Rush].
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { firstTurn, lastTwoMovesWere } from "../../util";

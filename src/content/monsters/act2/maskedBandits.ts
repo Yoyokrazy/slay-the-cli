@@ -4,15 +4,15 @@
 // the reference.
 // CONFLICT HONORED (Bear hp.base): [38,42] per spire-archive+wiki majority
 // (lightspeed's 52 max is a transcription typo for 42).
-// CONFLICT HONORED (Romeo A17): lightspeed's script (no A17 branch - strict
-// AGONIZING/CROSS alternation at every ascension) transcribed as primary; the
-// wiki's A17 double-Cross-Slash cycle is noted but not implemented.
+// CONFLICT HONORED (Romeo A17): Java BanditLeader.java:111-114 repeats
+// CROSS_SLASH at A17 until lastTwoMoves(CROSS_SLASH), then returns to
+// AGONIZING_SLASH.
 // CONFLICT HONORED (categories): all three are event-only fighters.
 // ENGINE-GAP: this engine's rollMove burns one aiRng.random(99) per turn
 // (values unused by these scripts).
 
 import type { MonsterDef } from "../../../engine/content/defs";
-import { firstTurn, lastMove } from "../../util";
+import { firstTurn, lastMove, lastTwoMovesWere } from "../../util";
 import { attackPlayer, playerPower, selfBlock } from "./_shared";
 
 export const bear: MonsterDef = {
@@ -71,9 +71,17 @@ export const romeo: MonsterDef = {
       execute: (ctx, self) => attackPlayer(ctx, self, ctx.asc >= 2 ? 17 : 15),
     },
   },
-  getMove: (_ctx, self) => {
+  getMove: (ctx, self) => {
     if (firstTurn(self)) return "ROMEO_MOCK";
-    return lastMove(self) === "ROMEO_AGONIZING_SLASH" ? "ROMEO_CROSS_SLASH" : "ROMEO_AGONIZING_SLASH";
+    if (lastMove(self) === "ROMEO_AGONIZING_SLASH") return "ROMEO_CROSS_SLASH";
+    if (
+      ctx.asc >= 17 &&
+      lastMove(self) === "ROMEO_CROSS_SLASH" &&
+      !lastTwoMovesWere(self, "ROMEO_CROSS_SLASH")
+    ) {
+      return "ROMEO_CROSS_SLASH";
+    }
+    return "ROMEO_AGONIZING_SLASH";
   },
 };
 

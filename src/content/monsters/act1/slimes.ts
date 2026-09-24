@@ -4,9 +4,8 @@
 // medium slimes of its type at slots [idx, idx+1] with hp = maxHp = its current
 // HP (spawns roll their own move and do not act that turn; +1 STRENGTH each with
 // Philosopher's Stone).
-// CONFLICT HONORED (ACID_SLIME_L, asc>=17): lightspeed's roll<40 branch tests the
-// MEDIUM slime's spit id (constant-false typo); per the wiki/real game we test the
-// L slime's OWN Corrosive Spit - never 3x in a row.
+// CONFLICT HONORED (ACID_SLIME_L, asc>=17): Java AcidSlime_L.java:130-140 tests
+// lastTwoMoves on its own Corrosive Spit branch, so L slime Spit is never 3x.
 
 import type { MonsterDef, EffectCtx } from "../../../engine/content/defs";
 import type { MonsterState } from "../../../engine/combat/combatState";

@@ -4,11 +4,9 @@
 // AI per roll: SINGLE_STAB 15% (never twice in a row), MULTI_STAB 85% (never
 // 3x). stabCount increments at SELECTION time whenever MULTI_STAB is rolled,
 // so the Nth Multi Stab hits N+1 times.
-// CONFLICT HONORED (A18 stab count): the A18 rule is encoded - stabCount ALSO
-// increments when SINGLE_STAB is selected (lightspeed transcribed the two
-// "if (asc18) ++stabCount" statements after return statements - dead code;
-// the wiki/real game increments every turn at A18, so a Multi Stab executing
-// on turn T hits T+1 times).
+// CONFLICT HONORED (A18 stab count): Java BookOfStabbing.java:130-151 increments
+// stabCount on SINGLE_STAB selection at A18 as well as on MULTI_STAB selection,
+// so a Multi Stab executing on turn T hits T+1 times.
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { lastMove, lastTwoMovesWere } from "../../util";

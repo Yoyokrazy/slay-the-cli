@@ -1,15 +1,15 @@
 // Centurion & Mystic - exact ports from data/corpus/monsters-act2.json.
 // Encounter layout (CENTURION_AND_HEALER): Centurion slot 0, Mystic slot 1.
 //
-// CONFLICT HONORED (Centurion hp.asc): [78,83] at A7+ per spire-archive+wiki
-// majority (lightspeed's 76 min is a transcription error).
-// CONFLICT HONORED (Centurion DEFEND stale intent): real game's
-// GainBlockRandomMonsterAction falls back to the Centurion when no other
+// CONFLICT HONORED (Centurion hp.asc): Java Centurion.java:35-38 sets [78,83]
+// at A7+ (lightspeed's 76 min is a transcription error).
+// CONFLICT HONORED (Centurion DEFEND stale intent): Java Centurion.java:77-80
+// uses GainBlockRandomMonsterAction, which falls back to self when no other
 // non-dying monster remains.
-// CONFLICT HONORED (Mystic heal repeat): real game has a lastTwoMoves gate on
-// HEAL despite lightspeed/wiki disagreement.
-// CONFLICT HONORED (Mystic heal threshold): missing >= 16, switching to >= 21
-// at A17 together with the 16 -> 20 heal amount (lightspeed; not the wiki A19).
+// CONFLICT HONORED (Mystic heal repeat): Java Healer.java:170-179 has a
+// lastTwoMoves gate on HEAL despite lightspeed/wiki disagreement.
+// CONFLICT HONORED (Mystic heal threshold): Java Healer.java:170-179 uses
+// missing HP >20 at A17 and >15 otherwise, i.e. >=21 / >=16.
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { ascTier, firstTurn, lastMove, lastTwoMovesWere } from "../../util";
@@ -87,11 +87,9 @@ export const mystic: MonsterDef = {
       intent: "buff",
       execute: (ctx, self) => {
         const amount = mysticHealAmount(ctx.asc);
-        const knight = ctx.combat!.monsters[0];
-        if (aliveCount(ctx) > 1 && knight && knight !== self && !knight.isDead && !knight.isEscaped) {
-          ctx.queue.addToBottom({ kind: "heal", target: monster(knight.idx), amount });
+        for (const m of ctx.combat!.monsters) {
+          if (!m.isDead && !m.isEscaped) ctx.queue.addToBottom({ kind: "heal", target: monster(m.idx), amount });
         }
-        ctx.queue.addToBottom({ kind: "heal", target: monster(self.idx), amount });
       },
     },
     MYSTIC_BUFF: {
@@ -102,12 +100,12 @@ export const mystic: MonsterDef = {
           [2, 3],
           [17, 4],
         ]);
-        const knight = ctx.combat!.monsters[0];
-        if (aliveCount(ctx) > 1 && knight && knight !== self && !knight.isDead && !knight.isEscaped) {
+        for (const m of ctx.combat!.monsters) {
+          if (m.idx === self.idx || m.isDead || m.isEscaped) continue;
           ctx.queue.addToBottom({
             kind: "applyPower",
             source: monster(self.idx),
-            target: monster(knight.idx),
+            target: monster(m.idx),
             powerId: "STRENGTH",
             amount: str,
           });

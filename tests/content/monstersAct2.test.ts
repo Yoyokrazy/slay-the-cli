@@ -637,6 +637,19 @@ describe("Centurion & Mystic", () => {
     expect(mon(s, 1).move).not.toBe("MYSTIC_HEAL");
   });
 
+  test("Mystic Heal and Buff affect every living monster", () => {
+    let s = fight(["CENTURION", "MYSTIC", "CENTURION"], { seed: "ALLIES" });
+    for (const idx of [0, 1, 2]) mon(s, idx).hp = mon(s, idx).maxHp - 20;
+    mon(s, 1).move = "MYSTIC_HEAL";
+    s = endTurn(s);
+    for (const idx of [0, 1, 2]) expect(mon(s, idx).hp).toBe(mon(s, idx).maxHp - 4);
+
+    s = fight(["CENTURION", "MYSTIC", "CENTURION"], { seed: "ALLIES_BUFF" });
+    mon(s, 1).move = "MYSTIC_BUFF";
+    s = endTurn(s);
+    for (const idx of [0, 1, 2]) expect(monPower(s, idx, "STRENGTH")?.amount).toBe(2);
+  });
+
   test("Mystic Buff Strength 2 (A2: 3, A17: 4); Attack/Debuff 8 + Frail 2 (A2: 9)", () => {
     for (const [asc, str] of [
       [0, 2],
@@ -1081,12 +1094,12 @@ function expectedTurnDamage(s: GameState, asc: number): number {
 }
 
 describe("Bronze Automaton", () => {
-  test("HP: 300 A0, 320 A9; prebattle Artifact 3 + Minion Leader", () => {
+  test("HP: 300 A0, 320 A9; prebattle Artifact 3", () => {
     expectHpRange("BRONZE_AUTOMATON", 0, 300, 300);
     expectHpRange("BRONZE_AUTOMATON", 9, 320, 320);
     const s = fight(["BRONZE_AUTOMATON"]);
     expect(monPower(s, 0, "ARTIFACT")?.amount).toBe(3);
-    expect(monPower(s, 0, "MINION_LEADER")).toBeDefined();
+    expect(monPower(s, 0, "MINION_LEADER")).toBeUndefined();
   });
 
   test("turn 1 spawns 2 Bronze Orbs (Minions, HP [52,58], first moves set, act next round)", () => {
@@ -1593,7 +1606,7 @@ describe("Masked Bandits", () => {
     expect(hpB - s2.run.hp).toBe(20);
   });
 
-  test("Romeo: Mock then Agonizing Slash (10 + Weak 2) / Cross Slash (15) alternating; A2: 12/17; A17 Weak 3", () => {
+  test("Romeo: Mock then Agonizing Slash (10 + Weak 2) / Cross Slash (15) alternating; A2: 12/17", () => {
     for (const moves of moveSequences(["ROMEO"], 0, { turns: 9 })) {
       expect(moves[0]).toBe("ROMEO_MOCK");
       for (let i = 1; i < moves.length; i++) {
@@ -1609,6 +1622,19 @@ describe("Masked Bandits", () => {
     const hp2 = s.run.hp;
     s = endTurn(s); // cross slash
     expect(hp2 - s.run.hp).toBe(15);
+  });
+
+  test("Romeo: A17 repeats Cross Slash twice before returning to Agonizing Slash; Weak 3", () => {
+    for (const moves of moveSequences(["ROMEO"], 0, { asc: 17, turns: 9 })) {
+      expect(moves.slice(0, 6)).toEqual([
+        "ROMEO_MOCK",
+        "ROMEO_AGONIZING_SLASH",
+        "ROMEO_CROSS_SLASH",
+        "ROMEO_CROSS_SLASH",
+        "ROMEO_AGONIZING_SLASH",
+        "ROMEO_CROSS_SLASH",
+      ]);
+    }
     let s17 = fight(["ROMEO"], { asc: 17 });
     s17 = endTurn(s17);
     const hpA = s17.run.hp;

@@ -2,7 +2,7 @@
 //
 // Automaton (boss, slot 1 in the reference encounter; orbs spawn into slots
 // 0 and 2 - generically: the two lowest slots in 0..2 that are not its own).
-// Prebattle: MINION_LEADER + ARTIFACT 3. Deterministic script:
+// Prebattle: ARTIFACT 3 (Java BronzeAutomaton.java:79-85). Deterministic script:
 //   SPAWN_ORBS, then repeat [FLAIL, BOOST, FLAIL, BOOST, HYPER_BEAM, STUNNED];
 //   at A19 HYPER_BEAM chains into BOOST instead of STUNNED, so the post-first-
 //   beam loop is [BOOST, FLAIL, BOOST, HYPER_BEAM].
@@ -21,9 +21,10 @@
 // the card's display name (the reference's cardSortedIdx is name order).
 // AI: STASIS at most once per orb (75% per roll until used), then BEAM 70%
 // (never 3x) / SUPPORT_BEAM 30% (never 3x; +12 block to the Automaton).
-// CONFLICT HONORED (post-stasis odds): lightspeed thresholds - BEAM 70%,
+// CONFLICT HONORED (post-stasis odds): Java BronzeOrb.java:80-99 uses BEAM 70%,
 // SUPPORT_BEAM 30% (the wiki prose swaps them).
-// CONFLICT HONORED (category): minion (spire-archive's "Elite" is a mislabel).
+// CONFLICT HONORED (category): Java BronzeOrb.java is spawned by the Automaton
+// and gets this engine's minion marker; spire-archive's "Elite" is a mislabel.
 //
 // hp quirk (game parity): each orb construct burns one monsterHpRng roll over
 // the BASE range (52,58) before the real asc-tiered roll - reproduced in
@@ -50,7 +51,6 @@ export const bronzeAutomaton: MonsterDef = {
   category: "boss",
   hp: (asc) => (asc >= 9 ? [320, 320] : [300, 300]),
   preBattle: (_ctx, self) => {
-    prePower(self, "MINION_LEADER", 1);
     prePower(self, "ARTIFACT", 3);
   },
   onDeath: (ctx, _self) => escapeMinions(ctx),
