@@ -4,7 +4,7 @@ import type { CardDef, ContentBundle, EffectCtx, MonsterDef, StanceDef } from ".
 import type { Stream } from "../../src/engine/core/rngRegistry";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { ActionQueue } from "../../src/engine/core/queue";
-import { PLAYER } from "../../src/engine/core/ids";
+import { PLAYER, monster } from "../../src/engine/core/ids";
 import { runQueue } from "../../src/engine/combat/interpreter";
 import { previewCardAt } from "../../src/engine/combat/preview";
 import { makeTestBundle } from "../helpers/testBundle";
@@ -651,6 +651,26 @@ describe("damage-pipeline relics", () => {
     s = play(s, "T_DEFEND");
     s = advance(s, { cmd: "endTurn" }, B);
     expect(s.run.hp).toBe(hp0);
+  });
+
+  test("Intangible caps damage before block absorbs it", () => {
+    const s = game({ deck: defends(5), hp: 60 });
+    s.combat!.player.block = 10;
+    s.combat!.player.powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    const ctx = makeCtx(s);
+    ctx.queue.addToBottom({ kind: "damage", target: PLAYER, info: { type: "attack", source: monster(0), amount: 50 } });
+    runQueue(ctx);
+    expect(s.run.hp).toBe(60);
+    expect(s.combat!.player.block).toBe(9);
+  });
+
+  test("Intangible caps before Torii and Tungsten Rod", () => {
+    const s = game({ deck: defends(5), relics: ["TORII", "TUNGSTEN_ROD"], hp: 60 });
+    s.combat!.player.powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    const ctx = makeCtx(s);
+    ctx.queue.addToBottom({ kind: "damage", target: PLAYER, info: { type: "attack", source: monster(0), amount: 50 } });
+    runQueue(ctx);
+    expect(s.run.hp).toBe(60);
   });
 
   test("Strike Dummy: strike-keyword cards deal +3", () => {

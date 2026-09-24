@@ -745,6 +745,15 @@ describe("Nemesis", () => {
     expect(hp2 - mon(s).hp).toBe(6);
   });
 
+  test("Intangible caps poison HP loss to 1", () => {
+    let s = fight(["NEMESIS"], { seed: "NEMPOISON", deck: defendDeck });
+    mon(s).powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    mon(s).powers.push({ id: "POISON", amount: 5, justApplied: false, data: null });
+    const hp0 = mon(s).hp;
+    s = endTurn(s);
+    expect(hp0 - mon(s).hp).toBe(1);
+  });
+
   test("Debuff: 3 Burns to discard (A18 5, adjudicated per wiki); never Scythe turn 1", () => {
     for (const [asc, burns] of [
       [0, 3],

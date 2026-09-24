@@ -65,6 +65,13 @@ describe("BLOODLETTING", () => {
       expect(s.combat!.player.energy).toBe(3 + e);
     }
   });
+
+  test("Intangible caps the HP loss to 1", () => {
+    let s = fight({ deck: ["BLOODLETTING", ...strikes(4)] });
+    s.combat!.player.powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    s = play(s, "BLOODLETTING");
+    expect(s.run.hp).toBe(79);
+  });
 });
 
 describe("BLOOD_FOR_BLOOD", () => {
@@ -226,6 +233,15 @@ describe("COMBUST", () => {
     s = endTurn(s);
     expect(s.run.hp).toBe(80 - 1 - 10);
     expect(monsterHp(s)).toBe(193);
+  });
+
+  test("Intangible caps stacked end-of-turn HP loss to 1", () => {
+    let s = fight({ deck: ["COMBUST", "COMBUST", ...strikes(3)] });
+    s = play(s, "COMBUST");
+    s = play(s, "COMBUST");
+    s.combat!.player.powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    s = endTurn(s);
+    expect(s.run.hp).toBe(80 - 1 - 1);
   });
 });
 
@@ -389,6 +405,14 @@ describe("HEMOKINESIS", () => {
       expect(s.run.hp).toBe(78);
       expect(monsterHp(s)).toBe(200 - dmg);
     }
+  });
+
+  test("Intangible caps the HP loss to 1", () => {
+    let s = fight({ deck: ["HEMOKINESIS", ...strikes(4)] });
+    s.combat!.player.powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    s = play(s, "HEMOKINESIS", 0);
+    expect(s.run.hp).toBe(79);
+    expect(monsterHp(s)).toBe(185);
   });
 });
 

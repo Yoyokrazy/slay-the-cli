@@ -262,6 +262,13 @@ describe("OFFERING", () => {
       expect(pileNames(s, "exhaust")).toEqual(["OFFERING"]);
     }
   });
+
+  test("Intangible caps the HP loss to 1", () => {
+    let s = fightWithInHand(["OFFERING"], { deck: ["OFFERING", ...strikes(9)] });
+    s.combat!.player.powers.push({ id: "INTANGIBLE", amount: 1, justApplied: false, data: null });
+    s = play(s, "OFFERING");
+    expect(s.run.hp).toBe(79);
+  });
 });
 
 describe("REAPER", () => {

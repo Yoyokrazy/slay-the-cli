@@ -180,7 +180,7 @@ export function executeAction(ctx: EffectCtx, a: GameAction): void {
 // ------------------------------------------------------------------------------
 
 function applyDamage(ctx: EffectCtx, target: ActorRef, info: DamageInfo): void {
-  let d = info.amount;
+  let d = capIntangible(ctx, target, info.amount);
 
   if (target.kind === "monster") {
     const m = ctx.combat!.monsters[target.idx];
@@ -225,17 +225,19 @@ function applyDamage(ctx: EffectCtx, target: ActorRef, info: DamageInfo): void {
 }
 
 function applyHpLoss(ctx: EffectCtx, target: ActorRef, amount: number): void {
-  // direct HP loss (Offering, Bloodletting, poison): bypasses block AND the damage pipeline
+  // direct HP loss (Offering, Bloodletting, poison): bypasses block, but still
+  // follows the game's damage-site Intangible cap before onLoseHp hooks.
+  const capped = capIntangible(ctx, target, amount);
   if (target.kind === "monster") {
     const m = ctx.combat!.monsters[target.idx];
     if (!m || m.isDead) return;
-    const d = Math.max(0, Math.floor(foldHookScoped(ctx, target, "powers", "onLoseHp", amount))); // Invincible cap
+    const d = Math.max(0, Math.floor(foldHookScoped(ctx, target, "powers", "onLoseHp", capped))); // Invincible cap
     m.hp = Math.max(0, m.hp - d);
     if (d > 0) fireHook(ctx, target, "wasHPLost", { type: "hpLoss", source: null, amount: d }, d);
     if (m.hp <= 0) monsterDeath(ctx, m);
     return;
   }
-  const d = foldHook(ctx, PLAYER, "onLoseHp", amount);
+  const d = foldHook(ctx, PLAYER, "onLoseHp", capped);
   if (d <= 0) return;
   ctx.run.hp = Math.max(0, ctx.run.hp - d);
   ctx.combat!.combatFlags.hpLostThisCombat += d;
@@ -243,6 +245,15 @@ function applyHpLoss(ctx: EffectCtx, target: ActorRef, amount: number): void {
   fireHook(ctx, PLAYER, "wasHPLost", { type: "hpLoss", source: null, amount: d }, d);
   checkBloodied(ctx);
   if (ctx.run.hp <= 0) playerDeath(ctx);
+}
+
+function capIntangible(ctx: EffectCtx, target: ActorRef, amount: number): number {
+  if (amount <= 1) return amount;
+  const powers =
+    target.kind === "player"
+      ? ctx.combat!.player.powers
+      : ctx.combat!.monsters[target.idx]?.powers;
+  return powers?.some((p) => p.id === "INTANGIBLE" && p.amount > 0) ? 1 : amount;
 }
 
 function onPlayerHpLost(ctx: EffectCtx): void {
