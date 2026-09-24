@@ -2,7 +2,7 @@
 
 import type { CardDef } from "../../../engine/content/defs";
 import { calcCardDamage } from "../../../engine/combat/damageCalc";
-import { PLAYER, monster } from "../../../engine/core/ids";
+import { PLAYER } from "../../../engine/core/ids";
 import { getPowerAmount } from "../../../engine/combat/powerRuntime";
 
 export const ironcladRares: CardDef[] = [
@@ -153,16 +153,9 @@ export const ironcladRares: CardDef[] = [
     keywords: ["exhaust"],
     onPlay: (ctx) => {
       const target = ctx.target ?? 0;
-      const n = ctx.combat!.player.piles.hand.length; // hand size at use time
-      ctx.queue.addToBottom({ kind: "exhaust", sel: { kind: "all", pile: "hand" } });
+      const count = ctx.combat!.player.piles.hand.length; // hand size at use time
       const dmg = calcCardDamage(ctx, ctx.card, target, ctx.upgraded ? 10 : 7);
-      for (let i = 0; i < n; i++) {
-        ctx.queue.addToBottom({
-          kind: "damage",
-          target: monster(target),
-          info: { type: "attack", source: PLAYER, amount: dmg },
-        });
-      }
+      ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/fiendFire", args: { target, dmg, count } });
     },
   },
   {

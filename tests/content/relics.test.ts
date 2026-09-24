@@ -804,6 +804,27 @@ describe("card-lifecycle relics", () => {
     expect(zeroed.length).toBe(1);
   });
 
+  test("Mummified Hand: ignores zero-base-cost and free-to-play cards", () => {
+    let s = gameWhere(
+      {
+        deck: [{ defId: "T_POWER" }, { defId: "T_CANTRIP" }, { defId: "T_COLORLESS" }, ...strikes(7)],
+        relics: ["MUMMIFIED_HAND"],
+      },
+      (st) => ["T_POWER", "T_CANTRIP", "T_COLORLESS"].every((n) => handNames(st).includes(n)),
+    );
+    const cantrip = s.combat!.player.piles.hand
+      .map((iid) => s.combat!.cards[iid]!)
+      .find((c) => c.defId === "T_CANTRIP")!;
+    cantrip.costForTurn = 2;
+    const colorless = s.combat!.player.piles.hand
+      .map((iid) => s.combat!.cards[iid]!)
+      .find((c) => c.defId === "T_COLORLESS")!;
+    colorless.freeToPlayOnce = true;
+    s = play(s, "T_POWER");
+    expect(cantrip.costForTurn).toBe(2);
+    expect(colorless.costForTurn).toBe(1);
+  });
+
   test("Gremlin Horn: enemy death grants 1 energy and 1 draw", () => {
     let s = game({ deck: jabs(12), relics: ["GREMLIN_HORN"], monsters: ["T_DUMMY", "T_DUMMY"] });
     let guard = 0;

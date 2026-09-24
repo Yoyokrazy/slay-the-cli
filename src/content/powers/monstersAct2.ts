@@ -11,10 +11,8 @@
 //   THIEVERY      powers/monstersAct1.ts - gold stolen per attack (Mugger).
 //   ARTIFACT/BARRICADE/METALLICIZE/STRENGTH/... powers/core.ts.
 //
-// CONFLICT HONORED (BYRD flight-removal): the corpus adjudicates the game/wiki
-// power semantics over lightspeed's status bookkeeping - FLIGHT is REMOVED when
-// it hits 0 (a grounded Byrd takes full damage and only regains Flight via
-// BYRD_FLY); lightspeed's AI logic is kept for all move selection.
+// Java FlightPower: ReducePowerAction removes Flight when it hits 0 and
+// onRemove changes the Byrd to GROUNDED; it only regains Flight via BYRD_FLY.
 
 import type { PowerDef } from "../../engine/content/defs";
 import { f32mul } from "../../engine/core/math";

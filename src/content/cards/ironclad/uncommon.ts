@@ -524,7 +524,7 @@ export const ironcladUncommons: CardDef[] = [
     keywords: [],
     primitives: [{ do: "block", n: "block" }],
     onExhaustThis: (ctx) => {
-      ctx.queue.addToBottom({ kind: "gainEnergy", n: ctx.upgraded ? 3 : 2 });
+      ctx.queue.addToTop({ kind: "gainEnergy", n: ctx.upgraded ? 3 : 2 });
     },
   },
   {

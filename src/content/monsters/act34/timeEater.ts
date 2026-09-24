@@ -3,8 +3,7 @@
 // force-ends the turn and grants +2 Strength. Haste fires on the first roll
 // after dropping below 50% HP, exactly once: heals UP to exactly
 // floor(maxHp/2), removes its own debuffs (Shackled included, negative
-// Strength -> 0) and at asc19+ gains 32 block (CONFLICT HONORED: 32 per
-// lightspeed + wiki; spire-archive's 26 is stale).
+// Strength -> 0) and at asc19+ gains headSlamDmg block (32).
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { lastMove, lastTwoMovesWere } from "../../util";
@@ -20,6 +19,7 @@ export const timeEater: MonsterDef = {
   id: "TIME_EATER",
   name: "Time Eater",
   category: "boss",
+  rollHp: false,
   hp: (asc) => (asc >= 9 ? [480, 480] : [456, 456]),
   preBattle: (_ctx, self) => prePower(self, "TIME_WARP", 0),
   moves: {

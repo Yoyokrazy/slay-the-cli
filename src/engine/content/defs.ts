@@ -211,6 +211,10 @@ export interface MonsterDef {
   category: "normal" | "elite" | "boss" | "minion" | "event";
   /** roll HP with monsterHpRng: randomRange(min, max), ascension-dependent */
   hp(asc: number): [number, number];
+  /** false for Java constructors that call fixed setHp(...) without monsterHpRng */
+  rollHp?: boolean;
+  /** optional constructor-time setup that runs immediately before this monster's HP roll */
+  beforeHpRoll?(ctx: EffectCtx, self: MonsterState): void;
   /** optional constructor-time setup that runs immediately after this monster's HP roll */
   afterHpRoll?(ctx: EffectCtx, self: MonsterState): void;
   moves: Record<MoveId, MonsterMoveDef>;

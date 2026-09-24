@@ -136,6 +136,21 @@ function healPlayerNow(ctx: EffectCtx, amount: number): void {
   ctx.run.hp = Math.min(ctx.run.maxHp, ctx.run.hp + healed);
 }
 
+/** Fiend Fire: queue all exhausts above all hits, with exhaust hooks able to interleave via addToTop. */
+function fiendFire(ctx: EffectCtx, args: unknown): void {
+  const { target, dmg, count } = args as { target: number; dmg: number; count: number };
+  for (let i = 0; i < count; i++) {
+    ctx.queue.addToTop({
+      kind: "damage",
+      target: monster(target),
+      info: { type: "attack", source: PLAYER, amount: dmg },
+    });
+  }
+  for (let i = 0; i < count; i++) {
+    ctx.queue.addToTop({ kind: "exhaust", sel: { kind: "random", pile: "hand", n: 1 } });
+  }
+}
+
 /** Reaper: AoE damage + heal the total HP the enemies actually lost, atomically. */
 function reaperAttack(ctx: EffectCtx, args: unknown): void {
   const { amounts } = args as { amounts: number[] };
@@ -341,6 +356,7 @@ function endTurnDebuff(ctx: EffectCtx, args: unknown): void {
 export const ironcladEffects: Map<string, EffectFn> = new Map<string, EffectFn>([
   ["ironclad/juggernautHit", juggernautHit],
   ["ironclad/swordBoomerangHit", swordBoomerangHit],
+  ["ironclad/fiendFire", fiendFire],
   ["ironclad/reaper", reaperAttack],
   ["ironclad/feed", feedAttack],
   ["ironclad/combustStack", combustStack],

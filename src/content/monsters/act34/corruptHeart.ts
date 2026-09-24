@@ -74,12 +74,12 @@ export const corruptHeart: MonsterDef = {
       execute: (ctx, self) => {
         const me = monster(self.idx);
         const str = self.powers.find((p) => p.id === "STRENGTH");
-        if (str && str.amount < 0) str.amount = 0; // clear negative Strength
-        applyPower(ctx, me, me, "STRENGTH", 2);
+        const additionalAmount = str && str.amount < 0 ? -str.amount : 0;
+        applyPower(ctx, me, me, "STRENGTH", additionalAmount + 2);
         const buffCount = Math.floor(turnNumber(ctx) / 3);
         if (buffCount === 1) applyPower(ctx, me, me, "ARTIFACT", 2);
         else if (buffCount === 2) applyPower(ctx, me, me, "BEAT_OF_DEATH", 1);
-        else if (buffCount === 3) applyPower(ctx, me, me, "PAINFUL_STABS", 1);
+        else if (buffCount === 3) applyPower(ctx, me, me, "PAINFUL_STABS", -1);
         else if (buffCount === 4) applyPower(ctx, me, me, "STRENGTH", 10);
         else applyPower(ctx, me, me, "STRENGTH", 50); // every subsequent buff
         // no forced successor: the next roll uses the 50/50

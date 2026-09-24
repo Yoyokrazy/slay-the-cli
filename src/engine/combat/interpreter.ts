@@ -344,13 +344,11 @@ export function spawnMonster(
   const def = ctx.bundle.monsters.get(monsterId);
   if (!def) throw new Error(`unknown monster ${monsterId}`);
   const idx = slot === "append" ? combat.monsters.length : slot;
-  const [lo, hi] = def.hp(ctx.asc);
-  const maxHp = hp ?? ctx.rng("monsterHpRng").randomRange(lo, hi);
   const m: import("./combatState").MonsterState = {
     id: monsterId,
     idx,
-    hp: maxHp,
-    maxHp,
+    hp: 0,
+    maxHp: 0,
     block: 0,
     powers: [],
     move: null,
@@ -360,6 +358,11 @@ export function spawnMonster(
     halfDead: false,
     data: {},
   };
+  def.beforeHpRoll?.(ctx, m);
+  const [lo, hi] = def.hp(ctx.asc);
+  const maxHp = hp ?? (def.rollHp === false ? lo : ctx.rng("monsterHpRng").randomRange(lo, hi));
+  m.hp = maxHp;
+  m.maxHp = maxHp;
   def.afterHpRoll?.(ctx, m);
   if (slot === "append") combat.monsters.push(m);
   else combat.monsters[idx] = m;

@@ -6,16 +6,14 @@
 // monsters in the monster phase) sets max HP to the flat 300 (asc9+: 320),
 // fully heals, keeps positive Strength, grants Minion Leader and forces Dark
 // Echo. Killing it in phase 2 ends the fight: the two Cultists flee.
-// CONFLICT HONORED (hp.asc): asc9+ initHp rolls hpRng.random(300,320) (a real
-// roll for RNG parity); REBIRTH then overwrites maxHp with the flat value.
-// CONFLICT HONORED (CURIOSITY): the on-Power-card Strength gain is real-game
-// behavior (lightspeed comments it out) - implemented in the CURIOSITY power.
+// Java: the constructor calls fixed setHp(300/320), with no monsterHpRng call;
+// REBIRTH then overwrites maxHp with the same flat value.
+// Java: CuriosityPower.onUseCard grants Strength when a Power card is used.
 // Encounter: 2 Cultists (slots 0,1) + Awakened One (slot 2); the Cultists
 // are NOT minions. The run layer must resolve the AWAKENED_ONE boss
 // encounter to ["CULTIST","CULTIST","AWAKENED_ONE"] (see act34BossEncounters
 // in ./index.ts); as a fallback, when spawned alone this preBattle appends
-// the two Cultists (their HP rolls then land AFTER the boss's - an
-// ENGINE-GAP vs the reference's slot-order stream).
+// the two Cultists.
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { spawnMonster } from "../../../engine/combat/interpreter";
@@ -36,7 +34,8 @@ export const awakenedOne: MonsterDef = {
   id: "AWAKENED_ONE",
   name: "Awakened One",
   category: "boss",
-  hp: (asc) => (asc >= 9 ? [300, 320] : [300, 300]),
+  rollHp: false,
+  hp: (asc) => (asc >= 9 ? [320, 320] : [300, 300]),
   preBattle: (ctx, self) => {
     self.powers.push({ id: "STRENGTH", amount: ctx.asc >= 4 ? 2 : 0, justApplied: false, data: null });
     prePower(self, "CURIOSITY", ctx.asc >= 19 ? 2 : 1);

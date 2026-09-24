@@ -109,8 +109,9 @@ export function initializeCombat(ctx: EffectCtx): void {
   for (const m of combat.monsters) {
     const def = ctx.bundle.monsters.get(m.id);
     if (!def) throw new Error(`unknown monster ${m.id}`);
+    def.beforeHpRoll?.(ctx, m);
     const [lo, hi] = def.hp(ctx.asc);
-    m.maxHp = ctx.rng("monsterHpRng").randomRange(lo, hi);
+    m.maxHp = def.rollHp === false ? lo : ctx.rng("monsterHpRng").randomRange(lo, hi);
     m.hp = m.maxHp;
     def.afterHpRoll?.(ctx, m);
   }

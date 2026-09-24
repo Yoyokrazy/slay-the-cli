@@ -453,9 +453,11 @@ export const act34MonsterPowers: PowerDef[] = [
     },
   },
   {
-    // Corrupt Heart: can lose at most `amount` more HP this turn; the
-    // allowance resets to data.base (300 / 200 at asc19) at the start of the
-    // owner's turn. Clamps via the monster-side onLoseHp fold.
+    // Corrupt Heart: can lose at most `amount` more HP this turn (attacks,
+    // thorns and HP loss alike: the real game routes HP_LOSS through
+    // AbstractMonster.damage, where onAttackedToChangeDamage applies to every
+    // damage type). The allowance resets to data.base (300 / 200 at asc19) at
+    // the start of the owner's turn. Clamps via the monster-side onLoseHp fold.
     id: "INVINCIBLE",
     name: "Invincible",
     kind: "buff",
@@ -475,8 +477,8 @@ export const act34MonsterPowers: PowerDef[] = [
     },
   },
   {
-    // Corrupt Heart buff #3: every attack hit that makes the player lose HP
-    // adds X Wounds to the discard pile.
+    // Corrupt Heart buff #3: every non-thorns hit that makes the player lose HP
+    // adds one Wound to the discard pile.
     id: "PAINFUL_STABS",
     name: "Painful Stabs",
     kind: "buff",
@@ -484,13 +486,13 @@ export const act34MonsterPowers: PowerDef[] = [
     turnBased: false,
     hooks: {
       onAttack: (ctx, _target, info, unblocked) => {
-        if (info.type !== "attack" || unblocked <= 0) return;
+        if (info.type === "thorns" || unblocked <= 0) return;
         ctx.queue.addToBottom({
           kind: "makeTempCard",
           defId: "WOUND",
           upgrades: 0,
           dest: "discard",
-          n: ctx.power!.amount,
+          n: 1,
         });
       },
     },

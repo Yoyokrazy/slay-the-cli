@@ -2,9 +2,8 @@
 // SLOW starts at 0 (+1 per card played; +10% damage taken each; resets each
 // round). It Is Time is rolled from monster turn 4 on (so first USED on turn
 // 5) and escalates +5 per turn to a +30 cap.
-// CONFLICT HONORED (asc18): per the wiki the Count/Glare phase lasts only 3
-// turns at A18+ - It Is Time starts on turn 4 and the escalation term shifts
-// to (turn - 4). lightspeed has no ascension branch (flagged as its gap).
+// Java: usePreBattleAction decrements count once at asc18+, so Count/Glare
+// lasts only 3 turns there; It Is Time starts on turn 4.
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { lastTwoMovesWere } from "../../util";
@@ -19,6 +18,7 @@ export const giantHead: MonsterDef = {
   id: "GIANT_HEAD",
   name: "Giant Head",
   category: "elite",
+  rollHp: false,
   hp: (asc) => (asc >= 8 ? [520, 520] : [500, 500]),
   preBattle: (_ctx, self) => prePower(self, "SLOW", 0),
   moves: {

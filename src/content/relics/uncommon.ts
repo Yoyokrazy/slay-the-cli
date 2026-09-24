@@ -2,7 +2,7 @@
 
 import type { RelicDef } from "../../engine/content/defs";
 import type { CardInstance } from "../../engine/combat/combatState";
-import type { HookCtx } from "../../engine/core/hooks";
+import { foldHook, type HookCtx } from "../../engine/core/hooks";
 import { f32add } from "../../engine/core/math";
 import { PLAYER } from "../../engine/core/ids";
 import { moveCard } from "../../engine/combat/piles";
@@ -228,7 +228,11 @@ export const uncommonRelics: RelicDef[] = [
       onUseCard: (ctx, card) => {
         if (ctx.bundle.cards.get(card.defId)?.type !== "power") return;
         const combat = ctx.combat!;
-        const candidates = combat.player.piles.hand.filter((iid) => combat.cards[iid]!.costForTurn > 0);
+        const candidates = combat.player.piles.hand.filter((iid) => {
+          const c = combat.cards[iid]!;
+          if (c.cost <= 0 || c.freeToPlayOnce) return false;
+          return Math.max(0, Math.floor(foldHook(ctx, PLAYER, "modifyCardCost", c.costForTurn, c))) > 0;
+        });
         if (candidates.length === 0) return;
         const iid = candidates[ctx.rng("cardRandomRng").random(candidates.length - 1)]!;
         combat.cards[iid]!.costForTurn = 0;

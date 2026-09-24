@@ -1,12 +1,12 @@
 // Spire Shield & Spire Spear - exact ports from data/corpus/monsters-act34.json
 // (SPIRE_SHIELD, SPIRE_SPEAR). Act-4 elite pair: Shield slot 0 (left/behind),
 // Spear slot 1 (right/front).
-// Back Attack (CONFLICT HONORED: per real game, BACK_ATTACK on each elite +
-// SURROUNDED on the player): each elite's attacks deal x1.5 while the player
-// is not facing it; the player faces the monster last targeted by a card
-// (initially the Spear, slot 1). A STRENGTH-0 instance is pre-seeded BEFORE
-// Back Attack so later Strength gains merge into it and the fold order stays
-// +strength -> x1.5 back-attack -> weak (the corpus damage-order note).
+// Java: Shield applies SURROUNDED to the player, both elites have BackAttack,
+// and targeting an enemy card flips the player toward that monster. Each
+// elite's attacks deal x1.5 while the player is not facing it (initially the
+// Spear, slot 1). A STRENGTH-0 instance is pre-seeded BEFORE Back Attack so
+// later Strength gains merge into it and the fold order stays +strength ->
+// x1.5 back-attack -> weak (the corpus damage-order note).
 // Fixed cadences: Shield SMASH on turns 3/6/9..., Spear SKEWER on 2/5/8...;
 // between them the two other moves are used once each in a 50/50 order
 // (aiRng.randomBoolean(), the accompanying aiRng.random(99) roll consumed but
@@ -60,6 +60,7 @@ export const spireShield: MonsterDef = {
   id: "SPIRE_SHIELD",
   name: "Spire Shield",
   category: "elite",
+  rollHp: false,
   hp: (asc) => (asc >= 8 ? [125, 125] : [110, 110]),
   preBattle: (ctx, self) => {
     spirePreBattle(ctx, self);
@@ -125,6 +126,7 @@ export const spireSpear: MonsterDef = {
   id: "SPIRE_SPEAR",
   name: "Spire Spear",
   category: "elite",
+  rollHp: false,
   hp: (asc) => (asc >= 8 ? [180, 180] : [160, 160]),
   preBattle: spirePreBattle,
   onDeath: (ctx) => cleanupSurroundedOnDeath(ctx),

@@ -12,6 +12,7 @@ import { getIntents } from "../../src/engine/combat/intents";
 import { buildBaseContentBundle } from "../../src/content/index";
 import { act34Monsters, act34Powers } from "../../src/content/monsters/act34/index";
 import type { CardDef, ContentBundle } from "../../src/engine/content/defs";
+import { monster } from "../../src/engine/core/ids";
 
 // ------------------------------------------------------------------------------
 // bundle: base content + act-3/4 monsters/powers + test-only utility cards
@@ -38,6 +39,21 @@ function makeBundle(): ContentBundle {
   for (const m of act34Monsters) b.monsters.set(m.id, m);
   for (const p of act34Powers) if (!b.powers.has(p.id)) b.powers.set(p.id, p);
   b.cards.set("T_NUKE", testAttack("T_NUKE", 500));
+  b.cards.set("T_HP_LOSS", {
+    id: "T_HP_LOSS",
+    name: "T_HP_LOSS",
+    color: "red",
+    type: "skill",
+    rarity: "special",
+    cost: 0,
+    target: "enemy",
+    values: {},
+    upgradeValues: {},
+    keywords: [],
+    onPlay: (ctx) => {
+      ctx.queue.addToBottom({ kind: "loseHp", target: monster(ctx.target ?? 0), amount: 500 });
+    },
+  });
   b.cards.set("T_BLAST", testAttack("T_BLAST", 250));
   b.cards.set("T_FREE", {
     id: "T_FREE",
@@ -681,17 +697,17 @@ describe("Writhing Mass", () => {
     expect(firsts.size).toBe(3);
   });
 
-  test("Malleable (adjudicated 4): block 4 then 5 per hit taken, escalating; resets to 4", () => {
+  test("Malleable: block 3 then 4 per hit taken, escalating; resets to 3", () => {
     let s = fight(["WRITHING_MASS"], { seed: "MALL", deck: strikeDeck });
-    expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(4);
+    expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(3);
     s = play(s, "STRIKE_RED", 0);
+    expect(mon(s).block).toBe(3);
+    expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(4);
+    s = play(s, "STRIKE_RED", 0); // 3 blocked, 3 unblocked
     expect(mon(s).block).toBe(4);
     expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(5);
-    s = play(s, "STRIKE_RED", 0); // 4 blocked, 2 unblocked
-    expect(mon(s).block).toBe(5);
-    expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(6);
     s = endTurn(s);
-    expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(4); // reset
+    expect(monPower(s, 0, "MALLEABLE")?.amount).toBe(3); // reset
   });
 
   test("Reactive: an unblocked hit rerolls the intent (never into the same move)", () => {
@@ -768,7 +784,7 @@ describe("Giant Head", () => {
     }
   });
 
-  test("A18 (adjudicated per wiki): It Is Time starts turn 4 at 40 (+5/turn)", () => {
+  test("A18: It Is Time starts turn 4 at 40 (+5/turn)", () => {
     let s = fight(["GIANT_HEAD"], { asc: 18, seed: "GH18" });
     for (let t = 0; t < 3; t++) {
       expect(mon(s).move).not.toBe("GIANT_HEAD_IT_IS_TIME");
@@ -841,7 +857,7 @@ describe("Nemesis", () => {
     expect(hp0 - mon(s).hp).toBe(1);
   });
 
-  test("Debuff: 3 Burns to discard (A18 5, adjudicated per wiki); never Scythe turn 1", () => {
+  test("Debuff: 3 Burns to discard (A18 5); never Scythe turn 1", () => {
     for (const [asc, burns] of [
       [0, 3],
       [18, 5],
@@ -861,17 +877,23 @@ describe("Nemesis", () => {
     }
   });
 
-  test("history: Scythe not within 2 moves of itself; Debuff never 2x; Attack never 3x", () => {
+  test("history: Scythe never repeats immediately; Debuff never 2x; Attack never 3x", () => {
     for (const moves of moveSequences("NEMESIS", { turns: 16 })) {
       for (let i = 0; i < moves.length; i++) {
         if (moves[i] === "NEMESIS_SCYTHE") {
           expect(moves[i + 1]).not.toBe("NEMESIS_SCYTHE");
-          expect(moves[i + 2]).not.toBe("NEMESIS_SCYTHE");
         }
       }
       expect(maxRunLength(moves, "NEMESIS_DEBUFF")).toBeLessThanOrEqual(1);
       expect(maxRunLength(moves, "NEMESIS_ATTACK")).toBeLessThanOrEqual(2);
     }
+  });
+
+  test("Scythe can recur after one intervening move once its Java cooldown expires", () => {
+    const moves = moveSequences("NEMESIS", { seed: "SCY0", turns: 16 })[0]!;
+    expect(
+      moves.some((move, i) => move === "NEMESIS_SCYTHE" && moves[i + 1] !== "NEMESIS_SCYTHE" && moves[i + 2] === "NEMESIS_SCYTHE"),
+    ).toBe(true);
   });
 });
 
@@ -884,6 +906,7 @@ describe("Reptomancer", () => {
     expectHpRange("REPTOMANCER", 0, 180, 190);
     expectHpRange("REPTOMANCER", 8, 190, 200);
     expectHpRange("DAGGER", 0, 20, 25);
+    expect(fight(["REPTOMANCER"]).rng.floor.monsterHpRng.counter).toBe(2); // Java constructor discard + real setHp roll
   });
 
   test("turn 1 always Summon; new dagger has Stab preset and skips the summon round", () => {
@@ -986,9 +1009,10 @@ describe("Reptomancer", () => {
 const AO_FIGHT = ["CULTIST", "CULTIST", "AWAKENED_ONE"];
 
 describe("Awakened One", () => {
-  test("HP: 300 flat A0; [300,320] rolled A9; prebattle Str 0/2(A4), Curiosity 1/2(A19), Regenerate 10/15(A19)", () => {
+  test("HP: 300 flat A0, 320 flat A9; prebattle Str 0/2(A4), Curiosity 1/2(A19), Regenerate 10/15(A19)", () => {
     expectHpRange("AWAKENED_ONE", 0, 300, 300);
-    expectHpRange("AWAKENED_ONE", 9, 300, 320);
+    expectHpRange("AWAKENED_ONE", 9, 320, 320);
+    expect(fight(AO_FIGHT, { asc: 9 }).rng.floor.monsterHpRng.counter).toBe(2); // only the two Cultists roll HP
     const s = fight(AO_FIGHT);
     expect(monPower(s, 2, "STRENGTH")?.amount).toBe(0);
     expect(monPower(s, 2, "CURIOSITY")?.amount).toBe(1);
@@ -1459,7 +1483,7 @@ describe("Corrupt Heart", () => {
     }
   });
 
-  test("Invincible caps HP loss at exactly 300 per turn; allowance resets at its turn start", () => {
+  test("Invincible caps HP loss at exactly 300 per turn (attacks and HP loss alike); allowance resets at its turn start", () => {
     let s = fight(["CORRUPT_HEART"], { seed: "INV", deck: nukeDeck });
     const maxHp = mon(s).maxHp;
     s = play(s, "T_NUKE", 0); // 500 -> capped at 300
@@ -1471,6 +1495,11 @@ describe("Corrupt Heart", () => {
     expect(monPower(s, 0, "INVINCIBLE")?.amount).toBe(300);
     s = play(s, "T_NUKE", 0);
     expect(mon(s).hp).toBe(maxHp - 600);
+
+    s = fight(["CORRUPT_HEART"], { seed: "INVHP", deck: Array(10).fill({ defId: "T_HP_LOSS" }) });
+    s = play(s, "T_HP_LOSS", 0);
+    expect(mon(s).hp).toBe(mon(s).maxHp - 300);
+    expect(monPower(s, 0, "INVINCIBLE")?.amount).toBe(0);
   });
 
   test("attacks: Blood Shots 2x12 / Echo 40 under Debilitate's Vulnerable (A4: 2x15 / 45)", () => {
@@ -1506,7 +1535,7 @@ describe("Corrupt Heart", () => {
       },
       10: () => {
         expect(monPower(s, 0, "STRENGTH")?.amount).toBe(6);
-        expect(monPower(s, 0, "PAINFUL_STABS")?.amount).toBe(1);
+        expect(monPower(s, 0, "PAINFUL_STABS")?.amount).toBe(-1);
       },
       13: () => expect(monPower(s, 0, "STRENGTH")?.amount).toBe(18),
       16: () => expect(monPower(s, 0, "STRENGTH")?.amount).toBe(70),
@@ -1522,10 +1551,18 @@ describe("Corrupt Heart", () => {
     }
   });
 
+  test("buff clears negative Strength by adding the offset plus 2", () => {
+    let s = fight(["CORRUPT_HEART"], { seed: "NEGBUFF" });
+    mon(s).powers.push({ id: "STRENGTH", amount: -5, justApplied: false, data: null });
+    for (let i = 0; i < 4; i++) s = endTurn(s);
+    expect(monPower(s, 0, "STRENGTH")?.amount).toBe(2);
+    expect(monPower(s, 0, "ARTIFACT")?.amount).toBe(2);
+  });
+
   test("Painful Stabs: every HP-losing hit adds a Wound to the discard pile", () => {
     let s = fight(["CORRUPT_HEART"], { seed: "STABS" });
     for (let t = 0; t < 10; t++) s = endTurn(s); // through turn 10's buff (Painful Stabs)
-    expect(monPower(s, 0, "PAINFUL_STABS")?.amount).toBe(1);
+    expect(monPower(s, 0, "PAINFUL_STABS")?.amount).toBe(-1);
     const move = mon(s).move!;
     const before = countCards(s, "WOUND");
     s = endTurn(s);

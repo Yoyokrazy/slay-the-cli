@@ -9,7 +9,6 @@ import {
   cnt,
   ensureContentEffects,
   gainGold,
-  makeCardInstance,
   randomCardDefs,
   relicDamage,
   relicDamageAll,
@@ -74,7 +73,15 @@ export const rareRelics: RelicDef[] = [
     name: "Charon's Ashes",
     tier: "rare",
     pool: "red",
-    hooks: { onExhaust: (ctx) => relicDamageAll(ctx, 3) },
+    hooks: {
+      onExhaust: (ctx) => {
+        ctx.queue.addToTop({
+          kind: "damageAllMonsters",
+          amounts: ctx.combat!.monsters.map(() => 3),
+          info: { type: "thorns", source: null },
+        });
+      },
+    },
   },
   {
     // "At the end of your turn, gain 1 Block for each card in your hand."
@@ -100,7 +107,7 @@ export const rareRelics: RelicDef[] = [
     hooks: {
       onExhaust: (ctx) => {
         const picked = randomCardDefs(ctx, 1, classPoolFilter(ctx))[0];
-        if (picked) makeCardInstance(ctx, picked.id, 0, "hand");
+        if (picked) ctx.queue.addToBottom({ kind: "makeTempCard", defId: picked.id, upgrades: 0, dest: "hand", n: 1 });
       },
     },
   },

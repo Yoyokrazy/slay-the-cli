@@ -145,9 +145,8 @@ export const silentPowers: PowerDef[] = [
   },
   {
     // "At the end of your turn, lose X Dexterity." Corpus id: WRAITH_FORM.
-    // CONFLICT HONORED: the corpus power text says "start of your turn"; the
-    // card text ("At the end of your turn, lose 1 Dexterity") and V2.3.4's
-    // WraithFormPower.atEndOfTurn agree on end of turn - end of turn it is.
+    // Java WraithFormPower.atEndOfTurn applies its (negative) amount as
+    // Dexterity; the engine stores a positive amount and applies -amount.
     id: "WRAITH_FORM_POWER",
     name: "Wraith Form",
     kind: "debuff",

@@ -1,8 +1,7 @@
 // Writhing Mass - exact port from data/corpus/monsters-act34.json
 // (WRITHING_MASS): the full conditional band cascade with in-band re-rolls.
-// CONFLICT HONORED (MALLEABLE): starts at 4 per the wiki (lightspeed
-// hardcodes 3; block amounts are invisible to its seed tests); the reset
-// restores the applied base (4), matching the game's MalleablePower.
+// Java: usePreBattleAction applies new MalleablePower(this); its default
+// constructor stores basePower = amount = 3, and reset restores that base.
 // Implant grants the PARASITE curse to the MASTER deck once used (even if
 // the Mass is later killed); Omamori's counter is consumed instead, and
 // Darkstone Periapt's +6 max HP fires at implant time when Omamori is absent.
@@ -21,10 +20,11 @@ export const writhingMass: MonsterDef = {
   id: "WRITHING_MASS",
   name: "Writhing Mass",
   category: "normal",
+  rollHp: false,
   hp: (asc) => (asc >= 7 ? [175, 175] : [160, 160]),
   preBattle: (_ctx, self) => {
     prePower(self, "REACTIVE", 1);
-    self.powers.push({ id: "MALLEABLE", amount: 4, justApplied: false, data: { base: 4 } });
+    self.powers.push({ id: "MALLEABLE", amount: 3, justApplied: false, data: { base: 3 } });
   },
   moves: {
     WRITHING_MASS_STRONG_STRIKE: {

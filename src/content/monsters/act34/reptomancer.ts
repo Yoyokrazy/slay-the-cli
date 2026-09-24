@@ -4,13 +4,10 @@
 // order [4, 1, 3, 0], have Stab preset (skipping the summon round - they are
 // not in that round's move queue), consume one aiRng.random(99) each
 // (noOpRollMove parity), and get +1 Strength with Philosopher's Stone.
-// CONFLICT HONORED (spawn cap): per the wiki, at most 4 Daggers in play -
-// Summon becomes Snake Strike when 4 daggers are alive (lightspeed instead
-// counts all alive monsters incl. the Reptomancer; unresolved without the
-// JAR, wiki taken as the cap the brief adjudicates).
-// ENGINE-GAP (rng parity): the reference's initHp consumes and DISCARDS one
-// extra monsterHpRng.random(180,190) before the real HP roll (not
-// reproducible in the engine's setup loop).
+// Java: canSpawn counts alive non-Reptomancer monsters and allows Summon while
+// aliveCount <= 3; with the four-dagger array this caps live Daggers at 4.
+// Java constructor consumes and discards one monsterHpRng.random(180,190)
+// before setHp performs the real ascension-dependent HP roll.
 // Slot geometry: acts.ts spawns [DAGGER, REPTOMANCER, DAGGER]; the array is
 // padded to 5 slots on the first summon so the [4,1,3,0] search order works
 // (the corpus's canonical layout has empties at 0 and 3 with the Reptomancer
@@ -34,6 +31,9 @@ export const reptomancer: MonsterDef = {
   id: "REPTOMANCER",
   name: "Reptomancer",
   category: "elite",
+  beforeHpRoll: (ctx) => {
+    ctx.rng("monsterHpRng").randomRange(180, 190);
+  },
   hp: (asc) => (asc >= 8 ? [190, 200] : [180, 190]),
   preBattle: (_ctx, self) => prePower(self, "MINION_LEADER", 1),
   moves: {

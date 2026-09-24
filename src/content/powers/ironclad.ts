@@ -56,7 +56,9 @@ export const ironcladPowers: PowerDef[] = [
     turnBased: false,
     hooks: {
       onExhaust: (ctx) => {
-        ctx.queue.addToBottom({ kind: "draw", n: ctx.power!.amount });
+        if (ctx.combat!.monsters.some((m) => !m.isDead && !m.isEscaped && !m.halfDead)) {
+          ctx.queue.addToBottom({ kind: "draw", n: ctx.power!.amount });
+        }
       },
     },
   },
@@ -83,7 +85,7 @@ export const ironcladPowers: PowerDef[] = [
     hooks: {
       onExhaust: (ctx) => {
         // GainBlockAction directly: no Dexterity/Frail (fromCard false)
-        ctx.queue.addToTop({ kind: "gainBlock", target: ctx.owner, amount: ctx.power!.amount, fromCard: false });
+        ctx.queue.addToBottom({ kind: "gainBlock", target: ctx.owner, amount: ctx.power!.amount, fromCard: false });
       },
     },
   },
