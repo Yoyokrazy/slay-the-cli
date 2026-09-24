@@ -9,6 +9,8 @@
 // buffs, opening on SIPHON_SOUL (handled: no ASLEEP -> first roll is SIPHON).
 
 import type { MonsterDef } from "../../../engine/content/defs";
+import { monster } from "../../../engine/core/ids";
+import { reducePower, removePower } from "../../../engine/combat/powerRuntime";
 import { firstTurn, lastMove, lastTwoMovesWere } from "../../util";
 import { attackPlayer, hasPower, playerPower, prePower } from "./_shared";
 
@@ -27,17 +29,13 @@ export const lagavulin: MonsterDef = {
       id: "LAGAVULIN_SLEEP",
       intent: "sleep",
       execute: (ctx, self) => {
-        // Natural wake at the end of game turn 3: ASLEEP and Metallicize gone.
+        // Natural wake at the end of game turn 3: ASLEEP gone and base Metallicize removed.
         // Removed synchronously (not queued): rollMove runs right after execute
-        // and must see the woken state; it also precedes the atEndOfTurn hook,
-        // so no Metallicize block is gained on the wake turn.
+        // and must see the woken state. The Metallicize reduction happens before
+        // atEndOfTurn, so only any remaining stacked amount can grant block.
         if (ctx.combat!.turn >= 3 && hasPower(self, "ASLEEP")) {
-          self.powers = self.powers.filter((p) => p.id !== "ASLEEP");
-          const met = self.powers.find((p) => p.id === "METALLICIZE");
-          if (met) {
-            met.amount -= 8;
-            if (met.amount <= 0) self.powers = self.powers.filter((p) => p.id !== "METALLICIZE");
-          }
+          removePower(ctx, monster(self.idx), "ASLEEP");
+          reducePower(ctx, monster(self.idx), "METALLICIZE", 8);
         }
       },
     },

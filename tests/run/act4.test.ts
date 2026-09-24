@@ -1,7 +1,11 @@
 import { test, expect, describe } from "bun:test";
 import { createRun, advance, type Command, type GameState } from "../../src/engine/game";
 import { makeRunTestBundle } from "./runTestBundle";
-import type { MonsterDef } from "../../src/engine/content/defs";
+import { corePowers } from "../../src/content/powers/core";
+import { act1Powers } from "../../src/content/monsters/act1";
+import { lagavulin } from "../../src/content/monsters/act1/lagavulin";
+import { act34Powers } from "../../src/content/monsters/act34";
+import type { MonsterDef, PowerDef } from "../../src/engine/content/defs";
 
 // Keys + Act 4 flow: recall, key gating at the act-3 boss, the fixed Act 4
 // column (rest -> shop -> Shield & Spear -> Heart), and final victory.
@@ -21,9 +25,17 @@ function stubMonster(id: string, hp: number): MonsterDef {
 
 function makeBundle() {
   const bundle = makeRunTestBundle();
+  const dummy = bundle.monsters.get("T_DUMMY")!;
+  bundle.monsters.set("T_DUMMY", { ...dummy, hp: () => [20, 20] });
   for (const id of ["SPIRE_SHIELD", "SPIRE_SPEAR", "CORRUPT_HEART", "DONU", "DECA"]) {
     bundle.monsters.set(id, stubMonster(id, 3));
   }
+  bundle.monsters.set("LAGAVULIN", lagavulin);
+  const neededPowers = new Set(["ASLEEP", "METALLICIZE", "REGENERATE"]);
+  for (const p of [...corePowers, ...act1Powers, ...act34Powers] as PowerDef[]) {
+    if (neededPowers.has(p.id)) bundle.powers.set(p.id, p);
+  }
+  bundle.acts[0]!.elites.push({ id: "LAGAVULIN_ELITE", monsters: ["LAGAVULIN"] });
   const act3 = bundle.acts.find((a) => a.act === 3)!;
   act3.bossEncounters = [{ id: "DONU_AND_DECA", monsters: ["DONU", "DECA"] }];
   return bundle;
@@ -54,6 +66,23 @@ function winCombat(s: GameState, guard = 200): GameState {
     if (alive && handIdx !== -1) s = adv(s, { cmd: "playCard", handIdx, target: alive.idx });
     else s = adv(s, { cmd: "endTurn" });
   }
+  return s;
+}
+
+function enterBurningElite(buff: number, encounterId = "A1_ELITE_1"): GameState {
+  let s = createRun({ seed: `BURNBUFF${buff}${encounterId}`, bundle, character: "IRONCLAD" });
+  s = throughNeow(s);
+  const map = s.run.map!;
+  map.burningEliteBuff = buff;
+  const x0 = map.rows[0]!.findIndex((n) => n !== null);
+  s.run.position = [x0, 0];
+  const target = map.rows[1]!.findIndex((n) => n !== null && map.rows[0]![x0]!.edges.includes(n.x));
+  map.rows[1]![target]!.kind = "elite";
+  map.rows[1]![target]!.burningElite = true;
+  s.run.pools.eliteList = [encounterId];
+  s.run.room = { kind: "map" };
+  s = adv(s, { cmd: "mapPick", x: target, y: 1 });
+  expect(s.run.room?.kind).toBe("combat");
   return s;
 }
 
@@ -135,23 +164,37 @@ describe("act 3 boss gating", () => {
 });
 
 describe("burning elite buff", () => {
-  test("buffed elite carries the rolled buff (exact table)", () => {
-    let s = createRun({ seed: "BURNBUFF", bundle, character: "IRONCLAD" });
-    s = throughNeow(s);
-    // force a burning elite node right above the start
-    const map = s.run.map!;
-    map.burningEliteBuff = 2; // Metallicize act*2+2 = 4 in act 1
-    const x0 = map.rows[0]!.findIndex((n) => n !== null);
-    s.run.position = [x0, 0];
-    const target = map.rows[1]!.findIndex((n) => n !== null && map.rows[0]![x0]!.edges.includes(n.x));
-    map.rows[1]![target]!.kind = "elite";
-    map.rows[1]![target]!.burningElite = true;
-    s.run.pools.eliteList = ["A1_ELITE_1"];
-    s.run.room = { kind: "map" };
-    s = adv(s, { cmd: "mapPick", x: target, y: 1 });
-    expect(s.run.room?.kind).toBe("combat");
-    for (const m of s.combat!.monsters) {
-      expect(m.powers.find((p) => p.id === "METALLICIZE")?.amount).toBe(4);
-    }
+  test("buffed elite carries the rolled buff values (exact table)", () => {
+    let s = enterBurningElite(0);
+    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "STRENGTH")?.amount).toBe(1);
+
+    s = enterBurningElite(1);
+    expect(s.combat!.monsters[0]!.maxHp).toBe(25);
+    expect(s.combat!.monsters[0]!.hp).toBe(25);
+
+    s = enterBurningElite(2);
+    expect(s.combat!.monsters[0]!.powers.filter((p) => p.id === "METALLICIZE").map((p) => p.amount)).toEqual([4]);
+
+    s = enterBurningElite(3);
+    expect(s.combat!.monsters[0]!.powers.filter((p) => p.id === "REGENERATE").map((p) => p.amount)).toEqual([3]);
+  });
+
+  test("burning Lagavulin stacks Metallicize and natural wake leaves the emerald stack", () => {
+    let s = enterBurningElite(2, "LAGAVULIN_ELITE");
+    expect(s.combat!.monsters[0]!.powers.filter((p) => p.id === "METALLICIZE").map((p) => p.amount)).toEqual([12]);
+    s = adv(s, { cmd: "endTurn" });
+    s = adv(s, { cmd: "endTurn" });
+    s = adv(s, { cmd: "endTurn" });
+    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "ASLEEP")).toBeUndefined();
+    expect(s.combat!.monsters[0]!.powers.filter((p) => p.id === "METALLICIZE").map((p) => p.amount)).toEqual([4]);
+  });
+
+  test("burning Regenerate heals at monster end of turn and does not decay", () => {
+    let s = enterBurningElite(3);
+    const m = s.combat!.monsters[0]!;
+    m.hp = m.maxHp - 5;
+    s = adv(s, { cmd: "endTurn" });
+    expect(s.combat!.monsters[0]!.hp).toBe(18);
+    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "REGENERATE")?.amount).toBe(3);
   });
 });

@@ -34,6 +34,28 @@ function sortPowers(ctx: EffectCtx, powers: PowerInstance[]): void {
   powers.sort((a, b) => powerPriority(ctx, a.id) - powerPriority(ctx, b.id));
 }
 
+function clampedAmount(amount: number): number {
+  return Math.max(-AMOUNT_CAP, Math.min(AMOUNT_CAP, amount));
+}
+
+function coalesceStackablePower(ctx: EffectCtx, powers: PowerInstance[], powerId: string): PowerInstance | undefined {
+  const def = ctx.bundle.powers.get(powerId);
+  const matching = powers.filter((p) => p.id === powerId);
+  if (matching.length <= 1) return matching[0];
+  if ((def?.stacking !== "intensity" && def?.stacking !== "duration") || matching.some((p) => p.data !== null)) {
+    return matching[0];
+  }
+
+  const keep = matching[0]!;
+  keep.amount = clampedAmount(matching.reduce((sum, p) => sum + p.amount, 0));
+  keep.justApplied = matching.some((p) => p.justApplied);
+  for (let i = powers.length - 1; i >= 0; i--) {
+    const p = powers[i]!;
+    if (p.id === powerId && p !== keep) powers.splice(i, 1);
+  }
+  return keep;
+}
+
 export function applyPower(
   ctx: EffectCtx,
   source: ActorRef | null,
@@ -67,10 +89,10 @@ export function applyPower(
   const justApplied =
     def.turnBased && target.kind === "player" && source !== null && source.kind === "monster";
 
-  const existing = powers.find((p) => p.id === powerId);
+  const existing = coalesceStackablePower(ctx, powers, powerId);
   if (existing) {
     if (def.stacking === "intensity" || def.stacking === "duration") {
-      existing.amount = Math.max(-AMOUNT_CAP, Math.min(AMOUNT_CAP, existing.amount + amount));
+      existing.amount = clampedAmount(existing.amount + amount);
       if (!def.canGoNegative && existing.amount <= 0 && def.stacking === "intensity") {
         removePower(ctx, target, powerId);
         return;
@@ -90,7 +112,8 @@ export function applyPower(
 }
 
 export function reducePower(ctx: EffectCtx, target: ActorRef, powerId: string, amount: number): void {
-  const p = getPower(ctx, target, powerId);
+  const powers = powersOf(ctx, target);
+  const p = coalesceStackablePower(ctx, powers, powerId);
   if (!p) return;
   p.amount -= amount;
   if (p.amount <= 0) removePower(ctx, target, powerId);

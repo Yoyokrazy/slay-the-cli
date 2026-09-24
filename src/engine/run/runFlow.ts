@@ -9,16 +9,18 @@
 // mapRng is per act (seed+1 / +200 / +600).
 
 import type { ContentBundle, EffectCtx } from "../content/defs";
-import type { CardId, CharacterId, EventId, MonsterId, RelicId } from "../core/ids";
+import type { MonsterState } from "../combat/combatState";
+import type { CardId, CharacterId, EventId, MonsterId, PowerId, RelicId } from "../core/ids";
 import type { RunState, RoomState, RewardEntry, MapNode, ActMap, RoomKind } from "./runState";
 import type { GameState, RunCommand } from "../game";
 import type { RngRegistry } from "../core/rngRegistry";
 import { Rng, JavaRandom, javaShuffle } from "../core/rng";
 import { f32add, f32mul } from "../core/math";
-import { PLAYER } from "../core/ids";
+import { PLAYER, monster } from "../core/ids";
 import { fireHook, foldHook } from "../core/hooks";
 import { buildCombatState, initializeCombat } from "../combat/setup";
 import { runQueue } from "../combat/interpreter";
+import { applyPower } from "../combat/powerRuntime";
 import { generateMap, MAP_HEIGHT, MAP_WIDTH } from "./mapGen";
 import { generateEncounters, generateExtraStrongEncounters, getActDef, resolveEncounter } from "./encounters";
 import {
@@ -352,7 +354,7 @@ function resolveCombatMonsters(
 
 /**
  * Burning ("emerald") elite buff, exact per the reference:
- *   0: +Strength(act)  1: +25% max HP (rounded)  2: Metallicize(act*2+2)  3: Regen(act*2+1)
+ *   0: +Strength(act)  1: +25% max HP (rounded)  2: Metallicize(act*2+2)  3: Regenerate(act*2+1)
  */
 function applyBurningEliteBuff(ctx: EffectCtx, buff: number, act: number): void {
   if (buff < 0 || !ctx.combat) return;
@@ -360,7 +362,7 @@ function applyBurningEliteBuff(ctx: EffectCtx, buff: number, act: number): void 
     if (m.isDead || m.isEscaped) continue;
     switch (buff) {
       case 0:
-        m.powers.push({ id: "STRENGTH", amount: act, justApplied: false, data: null });
+        applyBurningElitePower(ctx, m, "STRENGTH", act);
         break;
       case 1: {
         const inc = Math.round(m.maxHp * 0.25);
@@ -369,13 +371,23 @@ function applyBurningEliteBuff(ctx: EffectCtx, buff: number, act: number): void 
         break;
       }
       case 2:
-        m.powers.push({ id: "METALLICIZE", amount: act * 2 + 2, justApplied: false, data: null });
+        applyBurningElitePower(ctx, m, "METALLICIZE", act * 2 + 2);
         break;
       case 3:
-        m.powers.push({ id: "REGEN", amount: act * 2 + 1, justApplied: false, data: null });
+        applyBurningElitePower(ctx, m, "REGENERATE", act * 2 + 1);
         break;
     }
   }
+}
+
+function applyBurningElitePower(ctx: EffectCtx, m: MonsterState, powerId: PowerId, amount: number): void {
+  if (ctx.bundle.powers.has(powerId)) {
+    applyPower(ctx, null, monster(m.idx), powerId, amount);
+    return;
+  }
+  const existing = m.powers.find((p) => p.id === powerId);
+  if (existing) existing.amount += amount;
+  else m.powers.push({ id: powerId, amount, justApplied: false, data: null });
 }
 
 /** Consumed by game.ts when the interpreter flags victory inside a run. */

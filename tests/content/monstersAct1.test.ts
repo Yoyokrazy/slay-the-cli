@@ -958,6 +958,29 @@ describe("Lagavulin", () => {
     expect(mon(s).move).toBe("LAGAVULIN_ATTACK");
   });
 
+  test("burning Metallicize survives damage wake as one remaining stack", () => {
+    let s = fight(["LAGAVULIN"], { seed: "WAKE_BURNING", deck: strikeDeck });
+    mon(s).powers.find((p) => p.id === "METALLICIZE")!.amount = 12;
+    s = play(s, "STRIKE_RED", 0);
+    s = play(s, "STRIKE_RED", 0);
+    expect(monPower(s, 0, "ASLEEP")).toBeUndefined();
+    expect(mon(s).powers.filter((p) => p.id === "METALLICIZE").map((p) => p.amount)).toEqual([4]);
+  });
+
+  test("legacy split Metallicize save naturally wakes to one remaining stack", () => {
+    let s = fight(["LAGAVULIN"], { seed: "WAKE_LEGACY" });
+    mon(s).powers = [
+      { id: "ASLEEP", amount: 1, justApplied: false, data: null },
+      { id: "METALLICIZE", amount: 8, justApplied: false, data: null },
+      { id: "METALLICIZE", amount: 4, justApplied: false, data: null },
+    ];
+    s = endTurn(s);
+    s = endTurn(s);
+    s = endTurn(s);
+    expect(monPower(s, 0, "ASLEEP")).toBeUndefined();
+    expect(mon(s).powers.filter((p) => p.id === "METALLICIZE").map((p) => p.amount)).toEqual([4]);
+  });
+
   test("history: Attack never 3x, Siphon Soul never 2x", () => {
     for (const moves of moveSequences("LAGAVULIN", { turns: 18 })) {
       expect(maxRunLength(moves, "LAGAVULIN_ATTACK")).toBeLessThanOrEqual(2);
