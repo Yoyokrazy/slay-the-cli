@@ -52,6 +52,7 @@ const bundle = makeBundle();
 const SEEDS = Array.from({ length: 20 }, (_, i) => `SEED${i}`);
 const defendDeck = Array(10).fill({ defId: "DEFEND_RED" });
 const strikeDeck = Array(10).fill({ defId: "STRIKE_RED" });
+const pummelDeck = [{ defId: "PUMMEL" }, ...Array(9).fill({ defId: "DEFEND_RED" })];
 
 interface FightOpts {
   seed?: string;
@@ -1142,8 +1143,8 @@ describe("The Guardian", () => {
 
   // Issue #9: the shift used to branch on playerTurn, so one triggered in the
   // group's pre-turn phase (poison) set a "next roll" flag and let the already
-  // rolled attack through. The corpus says the current intent is replaced
-  // immediately, whoever's turn it is.
+  // rolled attack through. The queued state change resolves before the monster
+  // step, so the Guardian shifts instead of attacking.
   test("Mode Shift broken by poison replaces the intent before the Guardian acts", () => {
     let s = fight(["THE_GUARDIAN"], { seed: "GDPOISON" });
     const m = mon(s);
@@ -1169,6 +1170,17 @@ describe("The Guardian", () => {
     expect(mon(s).move).toBe("THE_GUARDIAN_DEFENSIVE_MODE");
     expect(monPower(s, 0, "MODE_SHIFT")).toBeUndefined();
     expect(mon(s).block).toBe(20);
+  });
+
+  test("Mode Shift block is queued after already-pending multi-hit damage", () => {
+    let s = fight(["THE_GUARDIAN"], { seed: "GDPUMMEL", deck: pummelDeck });
+    monPower(s, 0, "MODE_SHIFT")!.amount = 1;
+    const hp0 = mon(s).hp;
+    s = play(s, "PUMMEL", 0);
+    expect(hp0 - mon(s).hp).toBe(8);
+    expect(mon(s).block).toBe(20);
+    expect(monPower(s, 0, "MODE_SHIFT")).toBeUndefined();
+    expect(mon(s).move).toBe("THE_GUARDIAN_DEFENSIVE_MODE");
   });
 
   test("offensive loop + exact damage: Charge Up (block 9), Fierce Bash 32, Vent Steam, Whirlwind 5x4", () => {

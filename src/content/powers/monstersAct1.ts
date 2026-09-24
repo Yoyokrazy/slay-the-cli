@@ -7,8 +7,22 @@
 // loss from cards would not wake Lagavulin, tick Mode Shift, or trigger slime
 // splits. Attack damage - the overwhelmingly common path - behaves exactly.
 
-import type { PowerDef } from "../../engine/content/defs";
+import type { EffectCtx, EffectFn, PowerDef } from "../../engine/content/defs";
 import { replaceIntent } from "../monsters/act1/_shared";
+
+function guardianDefensiveModeShift(ctx: EffectCtx, args?: unknown): void {
+  if (!args || typeof args !== "object" || !("idx" in args) || typeof args.idx !== "number") return;
+  const target = { kind: "monster" as const, idx: args.idx };
+  const m = ctx.combat!.monsters[target.idx];
+  if (!m || m.isDead || m.isEscaped) return;
+  replaceIntent(m, "THE_GUARDIAN_DEFENSIVE_MODE");
+  ctx.queue.addToBottom({ kind: "removePower", target, powerId: "MODE_SHIFT" });
+  ctx.queue.addToBottom({ kind: "gainBlock", target, amount: 20, fromCard: false });
+}
+
+export const act1MonsterEffects: ReadonlyArray<readonly [string, EffectFn]> = [
+  ["act1/guardianDefensiveModeShift", guardianDefensiveModeShift],
+];
 
 /** Monster id -> its split move id (Split power interrupt targets). */
 const SPLIT_MOVES: Record<string, string> = {
@@ -60,9 +74,10 @@ export const act1MonsterPowers: PowerDef[] = [
     },
   },
   {
-    // The Guardian: amount is the live damage countdown. On every HP loss the
-    // counter drops by the amount lost; at <= 0 the power is removed, 20 block
-    // is gained, and the current intent becomes DEFENSIVE_MODE immediately.
+    // The Guardian: amount is the live damage countdown. On every HP loss while
+    // open the counter drops by the amount lost; at <= 0 the state-change action
+    // is queued behind already-pending actions. When it resolves it swaps the
+    // intent to DEFENSIVE_MODE, then queues MODE_SHIFT removal and 20 block.
     id: "MODE_SHIFT",
     name: "Mode Shift",
     kind: "buff",
@@ -75,16 +90,7 @@ export const act1MonsterPowers: PowerDef[] = [
         if (p.amount <= 0) return;
         p.amount -= amount;
         if (p.amount > 0) return;
-        const m = ctx.combat!.monsters[ctx.owner.idx]!;
-        // gainBlock lands after the removal (both addToTop, last-in-first-out)
-        ctx.queue.addToTop({ kind: "gainBlock", target: ctx.owner, amount: 20, fromCard: false });
-        ctx.queue.addToTop({ kind: "removePower", target: ctx.owner, powerId: "MODE_SHIFT" });
-        // "the current intent is immediately replaced with DEFENSIVE_MODE"
-        // (monsters-act1 ai.spec) - unconditionally, whoever's turn it is.
-        // A shift in the group's pre-turn phase (poison) therefore replaces
-        // the move BEFORE it executes, so the Guardian shifts instead of
-        // getting its attack off.
-        replaceIntent(m, "THE_GUARDIAN_DEFENSIVE_MODE");
+        ctx.queue.addToBottom({ kind: "effect", ref: "act1/guardianDefensiveModeShift", args: { idx: ctx.owner.idx } });
       },
     },
   },

@@ -20,7 +20,7 @@ import { silentCards, silentPowers, silentEffects } from "./cards/silent/index";
 import { defectCards, defectPowers, defectEffects } from "./cards/defect/index";
 import { watcherCards, watcherPowers, watcherEffects } from "./cards/watcher/index";
 import { allOrbs, orbEffects } from "./orbs";
-import { act1Monsters, act1Powers } from "./monsters/act1/index";
+import { act1Effects, act1Monsters, act1Powers } from "./monsters/act1/index";
 import { act2Monsters, act2Powers } from "./monsters/act2/index";
 import { act34Monsters, act34Powers } from "./monsters/act34/index";
 import { allRelics, relicSupportPowers, contentEffects } from "./relics/index";
@@ -113,6 +113,7 @@ const potionDefs: PotionDef[] = [...allPotions];
 
 const effects = new Map<string, EffectFn>();
 for (const [k, v] of ironcladEffects) effects.set(k, v);
+for (const [k, v] of act1Effects) effects.set(k, v);
 for (const [k, v] of colorlessEffects) effects.set(k, v);
 for (const [k, v] of contentEffects) effects.set(k, v);
 for (const [k, v] of eventEffects) effects.set(k, v);

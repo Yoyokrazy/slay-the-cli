@@ -2,7 +2,7 @@
 // src/content/index.ts wires these into the base bundle (integration lands
 // with a later phase; tests import from here directly).
 
-import type { MonsterDef, PowerDef } from "../../../engine/content/defs";
+import type { EffectFn, MonsterDef, PowerDef } from "../../../engine/content/defs";
 import { jawWorm } from "./jawWorm";
 import { cultist } from "./cultist";
 import { greenLouse, redLouse } from "./louses";
@@ -17,7 +17,7 @@ import { sentry } from "./sentry";
 import { slimeBoss } from "./slimeBoss";
 import { theGuardian } from "./theGuardian";
 import { hexaghost } from "./hexaghost";
-import { act1MonsterPowers } from "../../powers/monstersAct1";
+import { act1MonsterEffects, act1MonsterPowers } from "../../powers/monstersAct1";
 
 export const act1Monsters: MonsterDef[] = [
   cultist,
@@ -48,3 +48,4 @@ export const act1Monsters: MonsterDef[] = [
 ];
 
 export const act1Powers: PowerDef[] = [...act1MonsterPowers];
+export const act1Effects: ReadonlyArray<readonly [string, EffectFn]> = [...act1MonsterEffects];

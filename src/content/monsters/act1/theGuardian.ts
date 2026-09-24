@@ -1,8 +1,8 @@
 // The Guardian - exact port from data/corpus/monsters-act1.json (THE_GUARDIAN).
 // Offensive loop: CHARGING_UP (+9 block) -> FIERCE_BASH -> VENT_STEAM ->
 // WHIRLWIND -> repeat. MODE_SHIFT (prebattle 30; asc>=9: 35; asc>=19: 40) counts
-// down with every HP loss; at <= 0 it is removed, 20 block is gained, and the
-// intent becomes DEFENSIVE_MODE immediately (see powers/monstersAct1.ts).
+// down with every HP loss; at <= 0 a state-change action is queued to switch
+// intent to DEFENSIVE_MODE, then remove the power and grant 20 block.
 // Defensive sequence: DEFENSIVE_MODE (+Sharp Hide) -> ROLL_ATTACK -> TWIN_SLAM
 // (removes Sharp Hide, threshold += 10, re-gains MODE_SHIFT) -> WHIRLWIND,
 // re-entering the offensive loop.
