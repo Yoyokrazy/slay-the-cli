@@ -134,6 +134,8 @@ describe("DOUBLE_TAP", () => {
     expect(monsterHp(s)).toBe(200 - 12); // 6 x2
     expect(playerPower(s, "DOUBLE_TAP")).toBeUndefined();
     expect(s.combat!.player.energy).toBe(1); // paid once
+    expect(pileNames(s, "discard")).toEqual(["DOUBLE_TAP", "STRIKE_RED"]);
+    expect(s.combat!.player.piles.limbo).toEqual([]);
     s = play(s, "STRIKE_RED", 0);
     expect(monsterHp(s)).toBe(200 - 18); // no more doubling
   });

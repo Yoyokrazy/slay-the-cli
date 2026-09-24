@@ -14,7 +14,7 @@
 import type { PowerDef } from "../../engine/content/defs";
 import { f32add, f32mul } from "../../engine/core/math";
 import { PLAYER, monster } from "../../engine/core/ids";
-import { executeAction } from "../../engine/combat/interpreter";
+import { executeAction, queueReplayCopy } from "../../engine/combat/interpreter";
 import { reducePower } from "../../engine/combat/powerRuntime";
 import { ironcladPowers } from "./ironclad";
 import { colorlessPowers } from "../cards/colorless/powers";
@@ -217,17 +217,7 @@ export const silentPowers: PowerDef[] = [
         const item = ctx.rt.currentItem;
         if (!item || item.autoplayed) return; // duplicated plays don't re-trigger
         // duplicate resolves right after the original finishes (free, autoplayed)
-        ctx.combat!.cardQueue.unshift({
-          iid: card.iid,
-          target,
-          energyOnUse: item.energyOnUse,
-          ignoreEnergyTotal: true,
-          regardlessOfCost: true,
-          purgeOnUse: false,
-          exhaustOnUse: false,
-          autoplayed: true,
-          via: "BURST",
-        });
+        queueReplayCopy(ctx, card, target, item, "BURST");
         ctx.queue.addToBottom({ kind: "reducePower", target: ctx.owner, powerId: "BURST", amount: 1 });
       },
       atEndOfTurn: (ctx, isPlayerTurn) => {

@@ -478,6 +478,44 @@ export function makeTempCard(ctx: EffectCtx, defId: string, upgrades: number, de
   ctx.emit("cardCreated", { iid, defId, dest });
 }
 
+export function makeSameInstanceTempCard(ctx: EffectCtx, source: CardInstance, dest: Pile): number {
+  const combat = ctx.combat!;
+  const iid = combat.nextCardInstanceId++;
+  combat.cards[iid] = {
+    iid,
+    defId: source.defId,
+    upgrades: source.upgrades,
+    cost: source.cost,
+    costForTurn: source.costForTurn,
+    freeToPlayOnce: source.freeToPlayOnce,
+    masterIdx: null,
+    misc: source.misc,
+    retainOnce: false,
+  };
+  if (dest === "draw") {
+    moveCard(ctx, iid, "draw", "random");
+  } else {
+    combat.player.piles[dest].push(iid);
+  }
+  ctx.emit("cardCreated", { iid, defId: source.defId, dest });
+  return iid;
+}
+
+export function queueReplayCopy(ctx: EffectCtx, card: CardInstance, target: number | null, item: CardQueueItem, via: string): void {
+  const iid = makeSameInstanceTempCard(ctx, card, "limbo");
+  ctx.combat!.cardQueue.unshift({
+    iid,
+    target,
+    energyOnUse: item.energyOnUse,
+    ignoreEnergyTotal: true,
+    regardlessOfCost: true,
+    purgeOnUse: true,
+    exhaustOnUse: false,
+    autoplayed: true,
+    via,
+  });
+}
+
 function cardCtx(ctx: EffectCtx, c: CardInstance, target: number | null, energyOnUse: number): CardCtx {
   return { ...ctx, card: c, target, energyOnUse, upgraded: c.upgrades > 0 };
 }

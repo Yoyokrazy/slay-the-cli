@@ -1,14 +1,16 @@
 import { test, expect, describe } from "bun:test";
 import { createCombatGame, advance, type GameState } from "../../src/engine/game";
 import type { CardDef, ContentBundle, EffectCtx, StanceDef } from "../../src/engine/content/defs";
+import type { CardQueueItem } from "../../src/engine/combat/combatState";
 import type { Stream } from "../../src/engine/core/rngRegistry";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { ActionQueue } from "../../src/engine/core/queue";
-import { runQueue } from "../../src/engine/combat/interpreter";
+import { queueReplayCopy, runQueue } from "../../src/engine/combat/interpreter";
 import { makeTestBundle } from "../helpers/testBundle";
 import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
 import { ironcladCommons } from "../../src/content/cards/ironclad/common";
+import { ironcladUncommons } from "../../src/content/cards/ironclad/uncommon";
 import { allRelics, relicSupportPowers } from "../../src/content/relics";
 import { allPotions, effectivePotency } from "../../src/content/potions";
 import { returnRandomPotion } from "../../src/engine/run/rewards";
@@ -31,6 +33,10 @@ const extraCards: CardDef[] = [
     values: { magic: 1 }, upgradeValues: { magic: 2 }, keywords: [],
     primitives: [{ do: "applyPower", power: "STRENGTH", n: "magic", target: "self" }],
   },
+  {
+    id: "T_EXHAUST_BLOCK", name: "T Exhaust Block", color: "red", type: "skill", rarity: "common", cost: 1, target: "self",
+    values: { block: 4 }, upgradeValues: { block: 6 }, keywords: ["exhaust"], primitives: [{ do: "block", n: "block" }],
+  },
 ];
 
 const stances: StanceDef[] = [
@@ -50,6 +56,7 @@ function makeBundle(): ContentBundle {
   for (const p of allPotions) b.potions.set(p.id, p);
   for (const c of [...extraCards, ...ironcladBasics]) b.cards.set(c.id, c);
   for (const c of ironcladCommons.filter((c) => c.id === "PERFECTED_STRIKE" || c.id === "POMMEL_STRIKE" || c.id === "SHRUG_IT_OFF")) b.cards.set(c.id, c);
+  for (const c of ironcladUncommons.filter((c) => c.id === "INFLAME")) b.cards.set(c.id, c);
   for (const s of stances) b.stances.set(s.id, s);
   return b;
 }
@@ -75,7 +82,7 @@ function game(opts: {
 }
 
 /** Use a potion against the live state (the run-layer use site does not exist yet). */
-function usePotion(s: GameState, id: string, target: number | null = null): GameState {
+function effectCtx(s: GameState): { ctx: EffectCtx; registry: RngRegistry; rt: EffectCtx["rt"] } {
   const registry = RngRegistry.fromState(s.rng);
   const rt = { pending: null, currentItem: null, combatOver: null } as EffectCtx["rt"];
   const ctx: EffectCtx = {
@@ -91,9 +98,23 @@ function usePotion(s: GameState, id: string, target: number | null = null): Game
       rt.pending = c;
     },
   };
+  return { ctx, registry, rt };
+}
+
+/** Use a potion against the live state (the run-layer use site does not exist yet). */
+function usePotion(s: GameState, id: string, target: number | null = null): GameState {
+  const { ctx, registry, rt } = effectCtx(s);
   const def = B.potions.get(id);
   if (!def) throw new Error(`unknown potion ${id}`);
   def.onUse(ctx, target, effectivePotency(ctx, def));
+  runQueue(ctx);
+  s.rng = registry.saveState();
+  s.pending = rt.pending;
+  return s;
+}
+
+function drainQueue(s: GameState): GameState {
+  const { ctx, registry, rt } = effectCtx(s);
   runQueue(ctx);
   s.rng = registry.saveState();
   s.pending = rt.pending;
@@ -449,7 +470,61 @@ describe("card-manipulation potions", () => {
     s = play(s, "T_STRIKE", 0);
     expect(monsterHp(s)).toBe(Math.max(0, hp0 - 12));
     expect(s.combat!.player.energy).toBe(2);
+    expect(s.combat!.player.piles.discard.map((iid) => s.combat!.cards[iid]!.defId)).toEqual(["T_STRIKE"]);
+    expect(s.combat!.player.piles.limbo).toEqual([]);
     expect(power(s, "DUPLICATION")).toBeUndefined();
+  });
+
+  test("Duplication Potion: powers and exhausting skills replay from purge copies", () => {
+    let p = game({ deck: [{ defId: "INFLAME", upgrades: 1 }, ...Array(4).fill({ defId: "T_STRIKE" })] });
+    p = usePotion(p, "DUPLICATION_POTION");
+    p = play(p, "INFLAME");
+    expect(power(p, "STRENGTH")?.amount).toBe(6);
+    expect(p.combat!.player.piles.discard).toEqual([]);
+    expect(p.combat!.player.piles.exhaust).toEqual([]);
+    expect(p.combat!.player.piles.limbo).toEqual([]);
+
+    let e = game({ deck: [{ defId: "T_EXHAUST_BLOCK" }, ...Array(4).fill({ defId: "T_STRIKE" })] });
+    e = usePotion(e, "DUPLICATION_POTION");
+    e = play(e, "T_EXHAUST_BLOCK");
+    expect(e.combat!.player.block).toBe(8);
+    expect(e.combat!.player.piles.exhaust.map((iid) => e.combat!.cards[iid]!.defId)).toEqual(["T_EXHAUST_BLOCK"]);
+    expect(e.combat!.player.piles.limbo).toEqual([]);
+  });
+
+  test("Duplication Potion: X-cost copies use original energyOnUse", () => {
+    let s = game({ deck: [{ defId: "WHIRLWIND" }, ...Array(4).fill({ defId: "T_STRIKE" })] });
+    const hp0 = monsterHp(s);
+    s = usePotion(s, "DUPLICATION_POTION");
+    s = play(s, "WHIRLWIND");
+    expect(monsterHp(s)).toBe(Math.max(0, hp0 - 30)); // 3 energy * 5 damage, twice
+    expect(s.combat!.player.energy).toBe(0);
+  });
+
+  test("replay copies survive JSON round-trip while queued from limbo", () => {
+    const s = game({ deck: [{ defId: "INFLAME", upgrades: 1 }, ...Array(4).fill({ defId: "T_STRIKE" })] });
+    const iid = s.combat!.player.piles.hand.find((id) => s.combat!.cards[id]?.defId === "INFLAME");
+    if (iid === undefined) throw new Error("INFLAME not in hand");
+    const c = s.combat!.cards[iid]!;
+    const item: CardQueueItem = {
+      iid,
+      target: null,
+      energyOnUse: s.combat!.player.energy,
+      ignoreEnergyTotal: false,
+      regardlessOfCost: false,
+      purgeOnUse: false,
+      exhaustOnUse: false,
+      autoplayed: false,
+    };
+    const { ctx } = effectCtx(s);
+    queueReplayCopy(ctx, c, null, item, "DUPLICATION_POTION");
+    const copyIid = s.combat!.cardQueue[0]!.iid!;
+    expect(s.combat!.player.piles.limbo).toEqual([copyIid]);
+    const restored = JSON.parse(JSON.stringify(s)) as GameState;
+    const drained = drainQueue(restored);
+    expect(power(drained, "STRENGTH")?.amount).toBe(3);
+    expect(drained.combat!.cards[copyIid]).toBeUndefined();
+    expect(drained.combat!.player.piles.limbo).toEqual([]);
   });
 
   test("Attack Potion: choose 1 of 3 attacks, added to hand at cost 0", () => {

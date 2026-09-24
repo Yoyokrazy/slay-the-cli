@@ -4,6 +4,7 @@
 // definitions are corpus-identical, so map-merge by id is safe.
 
 import type { PowerDef } from "../../engine/content/defs";
+import { queueReplayCopy } from "../../engine/combat/interpreter";
 import { f32mul } from "../../engine/core/math";
 
 export const relicSupportPowers: PowerDef[] = [
@@ -173,9 +174,7 @@ export const relicSupportPowers: PowerDef[] = [
   },
   {
     // "This turn, your next X cards are played twice." (Duplication Potion)
-    // KNOWN LIMIT (ENGINE-GAP): a duplicated POWER card fizzles - the original
-    // resolution deletes the instance before the duplicate drains, because the
-    // engine's card queue is id-based while the game replays the object.
+    // The game replays a same-instance copy from limbo with purgeOnUse=true.
     id: "DUPLICATION",
     name: "Duplication",
     kind: "buff",
@@ -190,17 +189,7 @@ export const relicSupportPowers: PowerDef[] = [
         if (ctx.power!.amount <= 0) {
           ctx.queue.addToBottom({ kind: "removePower", target: ctx.owner, powerId: "DUPLICATION" });
         }
-        ctx.combat!.cardQueue.unshift({
-          iid: card.iid,
-          target,
-          energyOnUse: item.energyOnUse,
-          ignoreEnergyTotal: true,
-          regardlessOfCost: true,
-          purgeOnUse: false,
-          exhaustOnUse: false,
-          autoplayed: true,
-          via: "DUPLICATION_POTION",
-        });
+        queueReplayCopy(ctx, card, target, item, "DUPLICATION_POTION");
       },
       // expires at the end of the turn it was drunk
       atEndOfTurn: (ctx, isPlayerTurn) => {

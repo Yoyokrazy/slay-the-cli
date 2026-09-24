@@ -10,51 +10,19 @@
 
 import type { PowerDef, EffectCtx } from "../../engine/content/defs";
 import type { CardInstance, CardQueueItem } from "../../engine/combat/combatState";
-import { makeTempCard } from "../../engine/combat/interpreter";
+import { queueReplayCopy } from "../../engine/combat/interpreter";
 import { foldHook } from "../../engine/core/hooks";
 import { PLAYER } from "../../engine/core/ids";
 
 /**
  * Play `card` a second time (Echo Form / Amplify), DOUBLE_TAP pattern: the
  * duplicate resolves right after the original finishes (free, autoplayed).
- * ENGINE-GAP workaround for POWER cards: re-queuing the same iid fizzles
- * (afterCardUsed deletes the instance before the duplicate drains, as noted on
- * the DUPLICATION potion power), so powers are duplicated via a temp copy that
- * purges after resolving. ENGINE-NOTE: makeTempCard folds
- * modifyCreatedCardUpgrades (Master Reality), which the game would not apply
- * to a duplicated play.
+ * The reference queues a same-instance copy in limbo with purgeOnUse=true.
  */
 function duplicateCardPlay(ctx: EffectCtx, card: CardInstance, target: number | null, item: CardQueueItem, via: string): void {
-  const combat = ctx.combat!;
   const def = ctx.bundle.cards.get(card.defId);
   if (!def) return;
-  if (def.type === "power") {
-    const iid = combat.nextCardInstanceId;
-    makeTempCard(ctx, card.defId, card.upgrades, "limbo");
-    combat.cardQueue.unshift({
-      iid,
-      target,
-      energyOnUse: item.energyOnUse,
-      ignoreEnergyTotal: true,
-      regardlessOfCost: true,
-      purgeOnUse: true,
-      exhaustOnUse: false,
-      autoplayed: true,
-      via,
-    });
-    return;
-  }
-  combat.cardQueue.unshift({
-    iid: card.iid,
-    target,
-    energyOnUse: item.energyOnUse,
-    ignoreEnergyTotal: true,
-    regardlessOfCost: true,
-    purgeOnUse: false,
-    exhaustOnUse: false,
-    autoplayed: true,
-    via,
-  });
+  queueReplayCopy(ctx, card, target, item, via);
 }
 
 export const defectPowers: PowerDef[] = [

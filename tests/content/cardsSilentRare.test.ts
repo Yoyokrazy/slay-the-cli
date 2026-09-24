@@ -137,6 +137,15 @@ describe("BURST", () => {
     s = play(s, "DEADLY_POISON");
     expect(monsterPower(s, "POISON")).toBe(5); // single
   });
+
+  test("copies exhausting skills without exhausting the purge copy", () => {
+    let s = fight({ deck: ["BURST", "ADRENALINE", ...strikes(3)] });
+    s = play(s, "BURST");
+    s = play(s, "ADRENALINE");
+    expect(energy(s)).toBe(4); // 3 - Burst + two Adrenaline energy gains
+    expect(pileNames(s, "exhaust")).toEqual(["ADRENALINE"]);
+    expect(s.combat!.player.piles.limbo).toEqual([]);
+  });
 });
 
 describe("CORPSE_EXPLOSION", () => {

@@ -2,6 +2,7 @@
 
 import type { RelicDef } from "../../engine/content/defs";
 import { PLAYER, monster } from "../../engine/core/ids";
+import { queueReplayCopy } from "../../engine/combat/interpreter";
 import {
   classPoolFilter,
   cnt,
@@ -126,17 +127,7 @@ export const eventRelics: RelicDef[] = [
         if (ctx.bundle.cards.get(card.defId)?.type !== "attack") return;
         if (card.costForTurn < 2) return;
         cnt(ctx).set(1);
-        ctx.combat!.cardQueue.unshift({
-          iid: card.iid,
-          target,
-          energyOnUse: item.energyOnUse,
-          ignoreEnergyTotal: true,
-          regardlessOfCost: true,
-          purgeOnUse: false,
-          exhaustOnUse: false,
-          autoplayed: true,
-          via: "NECRONOMICON",
-        });
+        queueReplayCopy(ctx, card, target, item, "NECRONOMICON");
       },
     },
   },

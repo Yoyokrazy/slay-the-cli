@@ -5,6 +5,7 @@
 
 import type { PowerDef } from "../../engine/content/defs";
 import type { CardInstance } from "../../engine/combat/combatState";
+import { queueReplayCopy } from "../../engine/combat/interpreter";
 import { PLAYER } from "../../engine/core/ids";
 
 export const ironcladPowers: PowerDef[] = [
@@ -241,17 +242,7 @@ export const ironcladPowers: PowerDef[] = [
         const item = ctx.rt.currentItem;
         if (!item || item.autoplayed) return; // duplicated plays don't re-trigger
         // duplicate resolves right after the original finishes (free, autoplayed)
-        ctx.combat!.cardQueue.unshift({
-          iid: card.iid,
-          target,
-          energyOnUse: item.energyOnUse,
-          ignoreEnergyTotal: true,
-          regardlessOfCost: true,
-          purgeOnUse: false,
-          exhaustOnUse: false,
-          autoplayed: true,
-          via: "DOUBLE_TAP",
-        });
+        queueReplayCopy(ctx, card, target, item, "DOUBLE_TAP");
         ctx.queue.addToBottom({ kind: "reducePower", target: ctx.owner, powerId: "DOUBLE_TAP", amount: 1 });
       },
       atEndOfTurn: (ctx, isPlayerTurn) => {
