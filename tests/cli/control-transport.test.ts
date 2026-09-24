@@ -11,7 +11,7 @@ import type { SaveIo } from "../../src/cli/io/saves";
 const cleanup: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => { for (const stop of cleanup.splice(0).reverse()) await stop(); });
 function directory() {
-  const dir = join(process.cwd(), `.ctl-${randomUUID().slice(0, 8)}`);
+  const dir = join(process.cwd(), `.c-${randomUUID().slice(0, 6)}`);
   mkdirSync(dir, { mode: 0o700 });
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
@@ -107,19 +107,19 @@ test("existing files, sockets, unsafe directories and symlinks are never replace
   const dir = directory();
   const file = join(dir, "keep");
   writeFileSync(file, "do not remove");
-  const running = await live(join(dir, "live.sock"));
+  const running = await live(join(dir, "l.sock"));
   await expect(startControlServer(file, running.controller)).rejects.toThrow("already exists");
   expect(readFileSync(file, "utf8")).toBe("do not remove");
-  const inode = lstatSync(join(dir, "live.sock")).ino;
-  await expect(startControlServer(join(dir, "live.sock"), running.controller)).rejects.toThrow("already exists");
-  expect(lstatSync(join(dir, "live.sock")).ino).toBe(inode);
-  const unsafe = join(dir, "unsafe");
+  const inode = lstatSync(join(dir, "l.sock")).ino;
+  await expect(startControlServer(join(dir, "l.sock"), running.controller)).rejects.toThrow("already exists");
+  expect(lstatSync(join(dir, "l.sock")).ino).toBe(inode);
+  const unsafe = join(dir, "u");
   mkdirSync(unsafe, { mode: 0o755 });
   chmodSync(unsafe, 0o755);
-  await expect(startControlServer(join(unsafe, "socket"), running.controller)).rejects.toThrow("private");
-  const alias = join(dir, "alias");
+  await expect(startControlServer(join(unsafe, "s"), running.controller)).rejects.toThrow("private");
+  const alias = join(dir, "a");
   symlinkSync(dir, alias);
-  await expect(startControlServer(join(alias, "socket"), running.controller)).rejects.toThrow("private");
+  await expect(startControlServer(join(alias, "s"), running.controller)).rejects.toThrow("private");
   await expect(startControlServer("relative.sock", running.controller)).rejects.toThrow("absolute");
 });
 
