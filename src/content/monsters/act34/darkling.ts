@@ -1,17 +1,14 @@
 // Darkling - exact port from data/corpus/monsters-act34.json (DARKLING).
 // CONFLICT HONORED (CHOMP hits): 8x2 (asc2: 9x2) - wiki + spire-archive + the
 // decompiled game's two DamageActions; lightspeed's single hit is a bug.
-// CONFLICT HONORED (NIP asc2): lightspeed primary - construct rolls
-// monsterHpRng.random(9,13) at asc2+ AND the move adds +2 (effective 11-15).
+// CONFLICT HONORED (NIP asc2): decompiled game rolls
+// monsterHpRng.random(9,13) at asc2+ and NIP deals that stored value directly.
 // Life Link / revive cycle: on death, if any OTHER Darkling is still truly
 // alive, this one becomes halfDead (untargetable corpse) and revives at 50%
 // max HP two of its turns later (REGROW turn, then REINCARNATE) - driven by
 // hidden DARKLING_REGROW_DRIVER bookkeeping, since the engine skips halfDead
 // monsters in the monster phase. Killing the last living Darkling wins the
 // fight even while others are regrowing (the corpses die for real).
-// ENGINE-GAP: the reference rolls Nip damage during construction interleaved
-// with the HP roll; here all HP rolls precede preBattle (same monsterHpRng
-// calls, different stream order).
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { firstTurn, lastMove, lastTwoMovesWere } from "../../util";
@@ -28,17 +25,18 @@ export const darkling: MonsterDef = {
   name: "Darkling",
   category: "normal",
   hp: (asc) => (asc >= 7 ? [50, 59] : [48, 56]),
-  preBattle: (ctx, self) => {
-    prePower(self, "REGROW", 1);
+  afterHpRoll: (ctx, self) => {
     self.data.nipDamage =
       ctx.asc >= 2 ? ctx.rng("monsterHpRng").randomRange(9, 13) : ctx.rng("monsterHpRng").randomRange(7, 11);
+  },
+  preBattle: (_ctx, self) => {
+    prePower(self, "REGROW", 1);
   },
   moves: {
     DARKLING_NIP: {
       id: NIP,
       intent: "attack",
-      execute: (ctx, self) =>
-        attackPlayer(ctx, self, (self.data.nipDamage as number) + (ctx.asc >= 2 ? 2 : 0)),
+      execute: (ctx, self) => attackPlayer(ctx, self, self.data.nipDamage as number),
     },
     DARKLING_CHOMP: {
       id: CHOMP,

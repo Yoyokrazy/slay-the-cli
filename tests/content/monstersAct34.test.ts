@@ -8,6 +8,7 @@
 
 import { test, expect, describe } from "bun:test";
 import { createCombatGame, advance, type GameState } from "../../src/engine/game";
+import { getIntents } from "../../src/engine/combat/intents";
 import { buildBaseContentBundle } from "../../src/content/index";
 import { act34Monsters, act34Powers } from "../../src/content/monsters/act34/index";
 import type { CardDef, ContentBundle } from "../../src/engine/content/defs";
@@ -209,7 +210,7 @@ describe("Darkling", () => {
     expectHpRange("DARKLING", 7, 50, 59);
   });
 
-  test("Nip damage rolled at spawn: [7,11] A0, [9,13]+2 A2; Nip deals exactly it", () => {
+  test("Nip damage rolled at spawn: [7,11] A0, [9,13] A2; Nip deals and previews exactly it", () => {
     for (const seed of SEEDS.slice(0, 8)) {
       const d0 = mon(fight(["DARKLING"], { seed })).data.nipDamage as number;
       expect(d0).toBeGreaterThanOrEqual(7);
@@ -218,10 +219,20 @@ describe("Darkling", () => {
       expect(d2).toBeGreaterThanOrEqual(9);
       expect(d2).toBeLessThanOrEqual(13);
     }
-    for (const [asc, bonus] of [
-      [0, 0],
-      [2, 2],
-    ] as const) {
+    const fixed = fight(["DARKLING"], { seed: "A34S0", asc: 2 });
+    expect(mon(fixed).data.nipDamage).toBe(10);
+    expect(mon(fixed).move).toBe("DARKLING_NIP");
+    expect(getIntents(fixed, bundle)[0]?.damage).toBe(10);
+    expect(fight(["DARKLING", "DARKLING", "DARKLING"], { seed: "A34S0", asc: 2 }).combat!.monsters.map((m) => [
+      m.maxHp,
+      m.data.nipDamage,
+    ])).toEqual([
+      [54, 10],
+      [48, 9],
+      [54, 13],
+    ]);
+
+    for (const asc of [0, 2] as const) {
       let found = false;
       for (const seed of SEEDS) {
         let s = fight(["DARKLING"], { seed, asc });
@@ -231,7 +242,7 @@ describe("Darkling", () => {
             const str = monPower(s, 0, "STRENGTH")?.amount ?? 0;
             const before = s.run.hp;
             s = endTurn(s);
-            expect(before - s.run.hp).toBe(nip + bonus + str);
+            expect(before - s.run.hp).toBe(nip + str);
             found = true;
             break;
           }

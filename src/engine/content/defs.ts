@@ -211,6 +211,8 @@ export interface MonsterDef {
   category: "normal" | "elite" | "boss" | "minion" | "event";
   /** roll HP with monsterHpRng: randomRange(min, max), ascension-dependent */
   hp(asc: number): [number, number];
+  /** optional constructor-time setup that runs immediately after this monster's HP roll */
+  afterHpRoll?(ctx: EffectCtx, self: MonsterState): void;
   moves: Record<MoveId, MonsterMoveDef>;
   /** exact AI port: choose next move from roll (aiRng.random(99)) + history */
   getMove(ctx: EffectCtx, self: MonsterState, roll: number): MoveId;

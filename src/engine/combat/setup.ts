@@ -112,6 +112,7 @@ export function initializeCombat(ctx: EffectCtx): void {
     const [lo, hi] = def.hp(ctx.asc);
     m.maxHp = ctx.rng("monsterHpRng").randomRange(lo, hi);
     m.hp = m.maxHp;
+    def.afterHpRoll?.(ctx, m);
   }
 
   shuffleDrawPile(ctx);

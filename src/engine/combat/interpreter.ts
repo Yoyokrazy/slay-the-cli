@@ -360,6 +360,7 @@ export function spawnMonster(
     halfDead: false,
     data: {},
   };
+  def.afterHpRoll?.(ctx, m);
   if (slot === "append") combat.monsters.push(m);
   else combat.monsters[idx] = m;
   def.preBattle?.(ctx, m);
