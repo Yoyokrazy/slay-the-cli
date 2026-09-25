@@ -1,9 +1,10 @@
 // The hook vocabulary and THE single source of trigger ordering.
 //
 // Ordering rules (mirroring the game):
-//   Player-side sites: player powers in application order -> stance -> relics
-//   in obtain order. Monster-side sites: that monster's powers in application
-//   order. Value-modifying hooks fold left through the same order.
+//   Player-side sites: player powers in priority order (ties in application
+//   order) -> stance -> relics in obtain order. Monster-side sites: that
+//   monster's powers in the same priority order. Value-modifying hooks fold
+//   left through the same order.
 //   Exception: exhausting a card fires relics, then powers (fireHookScoped).
 //
 // Every engine call site fires hooks through the functions at the bottom of
@@ -68,6 +69,8 @@ export interface Hooks {
   wasHPLost?(ctx: HookCtx, info: DamageInfo, amount: number): void; // Rupture, Centennial Puzzle
   // --- block ---
   modifyBlock?(ctx: HookCtx, block: number, card: CardInstance | null): number; // Dex, Frail
+  /** fold: second card-block pass, after every modifyBlock (No Block) */
+  modifyBlockLast?(ctx: HookCtx, block: number): number;
   onGainedBlock?(ctx: HookCtx, amount: number): void; // Juggernaut
   // --- powers ---
   onApplyPower?(ctx: HookCtx, powerId: string, target: ActorRef, source: ActorRef | null): boolean | void; // Artifact veto (return false)
@@ -176,7 +179,7 @@ function relicSources(ctx: EffectCtx): HookSource[] {
   return out;
 }
 
-/** Power sources only (application order) for either actor. */
+/** Power sources only (list order: priority, ties in application order) for either actor. */
 function powerSources(ctx: EffectCtx, actor: ActorRef): HookSource[] {
   const powers =
     actor.kind === "player" ? (ctx.combat?.player.powers ?? []) : (ctx.combat?.monsters[actor.idx]?.powers ?? []);

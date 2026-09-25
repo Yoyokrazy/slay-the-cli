@@ -250,12 +250,14 @@ export const silentPowers: PowerDef[] = [
   {
     // "Attacks deal double damage for X turns." Player-applied at turn start
     // (justApplied false), so the normal end-of-round tick expires it after
-    // exactly the turn it covers.
+    // exactly the turn it covers. Real-game DoubleDamagePower: priority 6,
+    // so the x2 folds after Strength no matter which landed first.
     id: "DOUBLE_DAMAGE",
     name: "Double Damage",
     kind: "buff",
     stacking: "duration",
     turnBased: true,
+    priority: 6,
     hooks: {
       atDamageGive: (ctx, d) => f32mul(d, 2),
     },

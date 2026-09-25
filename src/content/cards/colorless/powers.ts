@@ -46,14 +46,16 @@ export const colorlessPowers: PowerDef[] = [
   },
   {
     // "You cannot gain Block from cards." (Panic Button) Duration ticks at end
-    // of round; only card-sourced block folds modifyBlock (calcBlock fromCard).
+    // of round; only card-sourced block folds (calcBlock fromCard). Like the
+    // game's NoBlockPower it zeroes in the modifyBlockLast pass, after
+    // Dexterity and Frail no matter which landed first.
     id: "NO_BLOCK",
     name: "No Block",
     kind: "debuff",
     stacking: "duration",
     turnBased: true,
     hooks: {
-      modifyBlock: () => 0,
+      modifyBlockLast: () => 0,
     },
   },
   {

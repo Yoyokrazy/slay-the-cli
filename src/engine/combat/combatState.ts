@@ -48,7 +48,7 @@ export interface PlayerCombatState {
   energyPerTurn: number;
   stance: StanceId;
   mantra: number; // accumulates; at >=10 subtract 10 and enter Divinity
-  powers: PowerInstance[]; // application order preserved - hook order depends on it
+  powers: PowerInstance[]; // priority-sorted, ties in application order - hook order depends on it
   orbs: OrbInstance[]; // index 0 = oldest (evokes first)
   orbSlots: number;
   piles: Record<Pile, CardInstanceId[]>;

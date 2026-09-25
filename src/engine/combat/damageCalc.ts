@@ -4,8 +4,9 @@
 //
 // Card damage (player -> monster), stage order per the game:
 //   base -> relic atDamageGive (Strike Dummy/Wrist Blade adds)
-//        -> player power atDamageGive in application order (Str/Vigor add,
-//           Double Damage x2, Pen Nib x2, Weak x0.75)
+//        -> player power atDamageGive in priority order, ties in application
+//           order (Str/Vigor add at 5, Double Damage/Pen Nib x2 at 6,
+//           Weak x0.75 at 99)
 //        -> stance give multiplier (Wrath x2, Divinity x3)
 //        -> target power atDamageReceive (Slow, Vulnerable x1.5/PaperPhrog x1.75)
 //        -> player atDamageFinalGive -> target atDamageFinalReceive
@@ -15,11 +16,15 @@
 // to 1 (its player-side path uses min correctly). Adjudicated: min.
 //
 // Monster damage (monster -> player):
-//   (base + monster power atDamageGive: Strength add, Weak x0.75/Paper Krane x0.6,
-//    Surrounded x1.5 when not facing)
+//   (base + monster power atDamageGive in the same priority order: Strength
+//    add, Weak x0.75/Paper Krane x0.6, Surrounded x1.5 when not facing)
 //        -> player power atDamageReceive (Vulnerable x1.5 / Odd Mushroom x1.25)
 //        -> player stance receive multiplier (Wrath x2)
 //        -> player power atDamageFinalReceive (Intangible -> min(d,1))
+//        -> floor, clamp >= 0
+//
+// Card block: base -> player power modifyBlock in priority order (Dexterity
+// add at 5, Frail x0.75 at 10) -> modifyBlockLast (No Block -> 0)
 //        -> floor, clamp >= 0
 
 import { f32, f32mul } from "../core/math";
@@ -64,6 +69,7 @@ export function calcBlock(ctx: EffectCtx, base: number, card: CardInstance | nul
   let b = f32(base);
   if (fromCard) {
     b = foldHookScoped(ctx, PLAYER, "powers", "modifyBlock", b, card);
+    b = foldHookScoped(ctx, PLAYER, "powers", "modifyBlockLast", b);
   }
   return Math.max(0, Math.floor(b));
 }

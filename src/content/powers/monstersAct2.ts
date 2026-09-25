@@ -35,12 +35,14 @@ export const act2MonsterPowers: PowerDef[] = [
     // last stack is lost the power is removed and the current intent becomes
     // the grounded stun. While airborne the amount resets to 3 (asc>=17: 4) at
     // the end of every round (the reference resets at the start of the player's
-    // turn; nothing acts between the two points).
+    // turn; nothing acts between the two points). Real-game FlightPower:
+    // priority 50.
     id: "FLIGHT",
     name: "Flying",
     kind: "buff",
     stacking: "intensity",
     turnBased: false,
+    priority: 50,
     hooks: {
       atDamageFinalReceive: (ctx, d) => (ctx.power!.amount > 0 ? f32mul(d, 0.5) : d),
       wasHPLost: (ctx, info) => {

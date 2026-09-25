@@ -40,9 +40,9 @@ export const corePowers: PowerDef[] = [
     },
   },
   {
-    // WeakPower priority 99: ApplyPowerAction re-sorts powers on every add, so
-    // Weak always folds after Strength/Vigor ((base + str) * 0.75), whatever
-    // order the two were applied in.
+    // Real-game WeakPower: priority 99. ApplyPowerAction re-sorts powers on
+    // every add, so the x0.75 folds after Strength, Vigor, Pen Nib and Double
+    // Damage no matter which landed first.
     id: "WEAK",
     name: "Weak",
     kind: "debuff",
@@ -57,7 +57,8 @@ export const corePowers: PowerDef[] = [
     },
   },
   {
-    // FrailPower priority 10: folds after Dexterity ((base + dex) * 0.75).
+    // Real-game FrailPower: priority 10, so the x0.75 folds after Dexterity
+    // no matter which landed first.
     id: "FRAIL",
     name: "Frail",
     kind: "debuff",
@@ -226,11 +227,13 @@ export const corePowers: PowerDef[] = [
     hooks: {}, // applied by Fungi Beast's onDeath
   },
   {
+    // Real-game IntangiblePower and IntangiblePlayerPower: priority 75.
     id: "INTANGIBLE",
     name: "Intangible",
     kind: "buff",
     stacking: "duration",
     turnBased: true,
+    priority: 75,
     hooks: { atDamageFinalReceive: (_ctx, d) => Math.min(d, 1) },
   },
 ];

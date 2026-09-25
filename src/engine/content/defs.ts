@@ -126,7 +126,8 @@ export interface PowerDef {
   canGoNegative?: boolean; // Strength/Dexterity/Focus
   /** engine bookkeeping, not a real power: never shown as a buff chip or logged */
   hidden?: boolean;
-  priority?: number; // rare explicit ordering overrides
+  /** the game's AbstractPower.priority (default 5): powers re-sort ascending on each new power */
+  priority?: number;
   hooks: Hooks;
   onApply?: (ctx: EffectCtx, target: ActorRef, amount: number) => void;
   onRemove?: (ctx: EffectCtx, target: ActorRef) => void;
