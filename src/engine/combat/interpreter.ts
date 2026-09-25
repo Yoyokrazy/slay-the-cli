@@ -306,6 +306,7 @@ function checkBloodied(ctx: EffectCtx): void {
 }
 
 function monsterDeath(ctx: EffectCtx, m: MonsterState): void {
+  const wasHalfDead = m.halfDead;
   m.isDead = true;
   m.block = 0;
   const def = ctx.bundle.monsters.get(m.id);
@@ -315,6 +316,9 @@ function monsterDeath(ctx: EffectCtx, m: MonsterState): void {
     fireHook(ctx, PLAYER, "onMonsterDeath", m);
     ctx.emit("monsterDeath", { idx: m.idx });
     checkVictory(ctx);
+  } else if (m.halfDead && !wasHalfDead) {
+    // a half-death still tells the relics (Darkling.damage, AwakenedOne.damage)
+    fireHook(ctx, PLAYER, "onMonsterDeath", m);
   }
 }
 
@@ -326,6 +330,7 @@ function checkVictory(ctx: EffectCtx): void {
   if ((alive.length === 0 || !anyNonMinion) && ctx.rt.combatOver !== "victory") {
     // minions flee when the last non-minion dies
     for (const m of alive) m.isEscaped = true;
+    fireHook(ctx, PLAYER, "onVictoryFirst");
     fireHook(ctx, PLAYER, "onVictory");
     ctx.rt.combatOver = "victory";
     ctx.emit("victory");
@@ -540,6 +545,11 @@ export function effectiveCost(ctx: EffectCtx, c: CardInstance): number {
   return Math.max(0, Math.floor(v));
 }
 
+/** Unplayable (-2) unless a source lets it through (canPlayUnplayable). */
+export function isUnplayable(ctx: EffectCtx, c: CardInstance): boolean {
+  return c.cost === -2 && !anyHook(ctx, PLAYER, "canPlayUnplayable", c);
+}
+
 // ------------------------------------------------------------------------------
 // card play resolution (exact order; see plan + reference notes)
 // ------------------------------------------------------------------------------
@@ -679,9 +689,17 @@ export function afterCardUsed(ctx: EffectCtx, args: unknown): void {
   c.freeToPlayOnce = false;
   if (!item?.skipTriggers) combat.turnFlags.lastCardPlayedType = def.type;
 
+  // UseCardAction: Strange Spoon rolls cardRandomRng.randomBoolean() for any
+  // non-Power card about to exhaust; on a hit it takes the non-exhaust path
+  const spoonSaves =
+    item?.exhaustOnUse === true &&
+    def.type !== "power" &&
+    ctx.run.relics.some((r) => r.defId === "STRANGE_SPOON") &&
+    ctx.rng("cardRandomRng").randomBoolean();
+
   if (def.type === "power") {
     removeCardFromCombat(ctx, iid); // powers vanish
-  } else if (item?.exhaustOnUse) {
+  } else if (item?.exhaustOnUse && !spoonSaves) {
     exhaustCard(ctx, iid);
   } else if (def.afterUse === "shuffleIntoDraw") {
     moveCard(ctx, iid, "draw", "random"); // Tantrum
@@ -784,6 +802,10 @@ export function startPlayerTurn(ctx: EffectCtx): void {
     combat.player.block = Math.max(0, Math.floor(foldHook(ctx, PLAYER, "modifyBlockRetention", 0)));
   }
 
+  // Turn 1 runs the combat-start relics first (applyStartOfCombatLogic, then
+  // applyStartOfTurnRelics). Anything they queue lands after the opening draw
+  // below, like the game's addToBot behind its DrawCardAction.
+  if (combat.turn === 1) fireHook(ctx, PLAYER, "atBattleStart");
   fireHook(ctx, PLAYER, "atStartOfTurn");
   triggerStartOfTurnOrbs(ctx);
 

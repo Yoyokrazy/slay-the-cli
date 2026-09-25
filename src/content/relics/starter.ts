@@ -14,31 +14,32 @@ export const starterRelics: RelicDef[] = [
     hooks: { onVictory: (ctx) => healPlayer(ctx, 6) },
   },
   {
-    // "At the start of each combat, draw 2 additional cards." - first-turn draw only.
+    // "At the start of each combat, draw 2 additional cards." Its own
+    // DrawCardAction behind the opening draw (SnakeRing.atBattleStart).
     id: "RING_OF_THE_SNAKE",
     name: "Ring of the Snake",
     tier: "starter",
     pool: "green",
-    hooks: { modifyDrawPerTurn: (ctx, n) => (ctx.combat!.turn === 1 ? n + 2 : n) },
+    hooks: { atBattleStart: (ctx) => ctx.queue.addToBottom({ kind: "draw", n: 2 }) },
   },
   {
-    // "At the start of each combat, Channel 1 Lightning."
+    // "At the start of each combat, Channel 1 Lightning." CrackedCore.atPreBattle.
     // DEPENDS: LIGHTNING orb def (Defect workstream); channel fizzles without orb slots.
     id: "CRACKED_CORE",
     name: "Cracked Core",
     tier: "starter",
     pool: "blue",
-    hooks: { atBattleStart: (ctx) => ctx.queue.addToBottom({ kind: "channelOrb", orbId: "LIGHTNING" }) },
+    hooks: { atBattleStartPreDraw: (ctx) => ctx.queue.addToBottom({ kind: "channelOrb", orbId: "LIGHTNING" }) },
   },
   {
-    // "At the start of each combat, add 1 Miracle into your hand."
+    // "At the start of each combat, add 1 Miracle into your hand." PureWater.atBattleStartPreDraw.
     // DEPENDS: MIRACLE card def (Watcher workstream).
     id: "PURE_WATER",
     name: "Pure Water",
     tier: "starter",
     pool: "purple",
     hooks: {
-      atBattleStart: (ctx) => {
+      atBattleStartPreDraw: (ctx) => {
         if (ctx.bundle.cards.has("MIRACLE")) {
           ctx.queue.addToBottom({ kind: "makeTempCard", defId: "MIRACLE", upgrades: 0, dest: "hand", n: 1 });
         }

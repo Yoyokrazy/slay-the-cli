@@ -2,7 +2,8 @@
 
 import type { RelicDef } from "../../engine/content/defs";
 import { PLAYER, monster } from "../../engine/core/ids";
-import { cnt, colorlessPoolFilter, healPlayer, randomCardDefs, requestCardPick } from "./lib";
+import { cnt, healPlayer, queueContentEffect } from "./lib";
+import { dollysMirrorPickup } from "./pickup";
 
 export const shopRelics: RelicDef[] = [
   {
@@ -60,7 +61,8 @@ export const shopRelics: RelicDef[] = [
   },
   {
     // "Whenever you break an enemy's Block, apply 2 Vulnerable."
-    // ENGINE-GAP: no block-broken hook in the damage pipeline.
+    // ENGINE-GAP / VERIFY-JAR: HandDrill.onBlockBroken is called from
+    // AbstractMonster.damage, which is missing from the decompile.
     id: "HAND_DRILL",
     name: "Hand Drill",
     tier: "shop",
@@ -68,13 +70,21 @@ export const shopRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Unplayable Status cards can now be played..." ENGINE-GAP: same
-    // playability override gap as Blue Candle.
+    // "Unplayable Status cards can now be played. Whenever you play a Status,
+    // Exhaust it." AbstractCard.canUse lets a cost -2 status through with
+    // Medical Kit; MedicalKit.onUseCard sets it to exhaust.
     id: "MEDICAL_KIT",
     name: "Medical Kit",
     tier: "shop",
     pool: "shared",
-    hooks: {},
+    hooks: {
+      canPlayUnplayable: (ctx, card) => ctx.bundle.cards.get(card.defId)?.type === "status",
+      onUseCard: (ctx, card) => {
+        if (ctx.bundle.cards.get(card.defId)?.type === "status" && ctx.rt.currentItem) {
+          ctx.rt.currentItem.exhaustOnUse = true;
+        }
+      },
+    },
   },
   {
     // "50% discount on all products!"
@@ -94,7 +104,9 @@ export const shopRelics: RelicDef[] = [
   },
   {
     // "Whenever you play a Power, Attack, and Skill in the same turn, remove all
-    // of your debuffs." counter bitmask: 1 attack | 2 skill | 4 power | 8 fired.
+    // of your debuffs." counter bitmask: 1 attack | 2 skill | 4 power. On the
+    // third type OrangePellets queues a RemoveDebuffsAction and clears its
+    // flags, so a second full set in the same turn fires again.
     id: "ORANGE_PELLETS",
     name: "Orange Pellets",
     tier: "shop",
@@ -106,14 +118,11 @@ export const shopRelics: RelicDef[] = [
         const bit = type === "attack" ? 1 : type === "skill" ? 2 : type === "power" ? 4 : 0;
         if (bit === 0) return;
         const c = cnt(ctx).get() | bit;
-        cnt(ctx).set(c);
-        if ((c & 7) === 7 && (c & 8) === 0) {
-          cnt(ctx).set(c | 8);
-          for (const p of ctx.combat!.player.powers) {
-            if (ctx.bundle.powers.get(p.id)?.kind === "debuff") {
-              ctx.queue.addToBottom({ kind: "removePower", target: PLAYER, powerId: p.id });
-            }
-          }
+        if (c === 7) {
+          cnt(ctx).set(0);
+          queueContentEffect(ctx, "content:removePlayerDebuffs");
+        } else {
+          cnt(ctx).set(c);
         }
       },
     },
@@ -142,7 +151,8 @@ export const shopRelics: RelicDef[] = [
   },
   {
     // "Cards which Exhaust when played will instead discard 50% of the time."
-    // ENGINE-GAP: no exhaust-redirect hook in the exhaust flow.
+    // UseCardAction's cardRandomRng.randomBoolean(), in the interpreter's
+    // afterCardUsed (non-Power cards that would exhaust).
     id: "STRANGE_SPOON",
     name: "Strange Spoon",
     tier: "shop",
@@ -161,24 +171,14 @@ export const shopRelics: RelicDef[] = [
   },
   {
     // "At the start of each combat, choose 1 of 3 random Colorless cards and add
-    // the chosen card into your hand." DEPENDS: colorless card pool.
+    // the chosen card into your hand." Toolbox.atBattleStartPreDraw queues a
+    // ChooseOneColorless: resolved before the opening draw, 3 distinct
+    // colorless cards (no HEALING cards), no skip. DEPENDS: colorless card pool.
     id: "TOOLBOX",
     name: "Toolbox",
     tier: "shop",
     pool: "shared",
-    hooks: {
-      atStartOfTurnPostDraw: (ctx) => {
-        if (ctx.combat!.turn !== 1) return;
-        const picks = randomCardDefs(ctx, 3, colorlessPoolFilter());
-        requestCardPick(ctx, {
-          defIds: picks.map((d) => d.id),
-          copies: 1,
-          costZero: false,
-          reason: "Toolbox",
-          dest: "hand",
-        });
-      },
-    },
+    hooks: { atBattleStartPreDraw: (ctx) => queueContentEffect(ctx, "content:toolboxChoose") },
   },
   {
     // "At the start of each combat, apply 4 Poison to ALL enemies." DEPENDS: POISON power.
@@ -198,7 +198,9 @@ export const shopRelics: RelicDef[] = [
     },
   },
   {
-    // "When obtained, brews 5 random potions." RUN-LAYER (potion generation).
+    // "When obtained, brews 5 random potions." ENGINE-GAP: Cauldron.onEquip
+    // opens a reward screen over the merchant (5 potions, its card reward
+    // stripped); the run layer has no rewards screen that returns to a shop.
     id: "CAULDRON",
     name: "Cauldron",
     tier: "shop",
@@ -206,11 +208,12 @@ export const shopRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Upon pickup, obtain an additional copy of a card in your deck." RUN-LAYER.
+    // "Upon pickup, obtain an additional copy of a card in your deck." (pickup.ts)
     id: "DOLLYS_MIRROR",
     name: "Dolly's Mirror",
     tier: "shop",
     pool: "shared",
+    onEquip: dollysMirrorPickup,
     hooks: {},
   },
   {
@@ -226,7 +229,9 @@ export const shopRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Upon pickup, choose and add 5 cards to your deck." RUN-LAYER.
+    // "Upon pickup, choose and add 5 cards to your deck." ENGINE-GAP:
+    // Orrery.onEquip adds 4 card rewards and the reward screen a 5th, over the
+    // merchant; the run layer has no rewards screen that returns to a shop.
     id: "ORRERY",
     name: "Orrery",
     tier: "shop",

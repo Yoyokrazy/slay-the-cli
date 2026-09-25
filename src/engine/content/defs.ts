@@ -149,6 +149,13 @@ export interface RelicDef {
   energyBonusEliteBossOnly?: boolean;
   /** present in game files but never offered in-game; kept out of every relic pool */
   unobtainable?: boolean;
+  /**
+   * AbstractRelic.canSpawn, asked when the relic comes off a pool; a refusal
+   * throws it away and draws again from the END of the pool
+   * (AbstractDungeon.returnEndRandomRelicKey). `inShop` stands for
+   * getCurrRoom() instanceof ShopRoom.
+   */
+  canSpawn?(ctx: EffectCtx, inShop: boolean): boolean;
 }
 
 export interface PotionDef {

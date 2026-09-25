@@ -7,7 +7,16 @@ import { f32add } from "../../engine/core/math";
 import { PLAYER } from "../../engine/core/ids";
 import { moveCard } from "../../engine/combat/piles";
 import { obtainRelicFromPool } from "../../engine/run/rewards";
-import { cnt, effectiveKeywords, healPlayer, relicDamageAll } from "./lib";
+import {
+  cnt,
+  deckHasNonBasic,
+  effectiveKeywords,
+  healPlayer,
+  increaseMaxHp,
+  relicDamageAll,
+  spawnsOutsideShops,
+  spawnsUpToFloor,
+} from "./lib";
 import { bottlePickup } from "./pickup";
 
 /** Shared "every 3 <type>s in a single turn" counter (Kunai/Shuriken/Fan/Letter Opener). */
@@ -36,14 +45,22 @@ function bottledToTop(ctx: HookCtx, type: "attack" | "skill" | "power"): void {
 
 export const uncommonRelics: RelicDef[] = [
   {
-    // "Unplayable Curse cards can now be played..." ENGINE-GAP: the engine
-    // rejects cost -2 cards before any hook fires; needs playability override
-    // plus lose-1-HP-and-exhaust play semantics.
+    // "Unplayable Curse cards can now be played. Whenever you play a Curse,
+    // lose 1 HP and Exhaust it." AbstractCard.canUse lets a cost -2 curse
+    // through with Blue Candle; BlueCandle.onUseCard queues a LoseHPAction(1)
+    // and sets the card to exhaust (Strange Spoon can still save it).
     id: "BLUE_CANDLE",
     name: "Blue Candle",
     tier: "uncommon",
     pool: "shared",
-    hooks: {},
+    hooks: {
+      canPlayUnplayable: (ctx, card) => ctx.bundle.cards.get(card.defId)?.type === "curse",
+      onUseCard: (ctx, card) => {
+        if (ctx.bundle.cards.get(card.defId)?.type !== "curse") return;
+        ctx.queue.addToBottom({ kind: "loseHp", target: PLAYER, amount: 1 });
+        if (ctx.rt.currentItem) ctx.rt.currentItem.exhaustOnUse = true;
+      },
+    },
   },
   {
     // "Upon pickup, choose an Attack card. At the start of each combat, this
@@ -53,6 +70,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "Bottled Flame",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: deckHasNonBasic("attack"),
     onEquip: (ctx) => bottlePickup(ctx, "BOTTLED_FLAME", "attack"),
     hooks: { atBattleStartPreDraw: (ctx) => bottledToTop(ctx, "attack") },
   },
@@ -61,6 +79,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "Bottled Lightning",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: deckHasNonBasic("skill"),
     onEquip: (ctx) => bottlePickup(ctx, "BOTTLED_LIGHTNING", "skill"),
     hooks: { atBattleStartPreDraw: (ctx) => bottledToTop(ctx, "skill") },
   },
@@ -69,21 +88,22 @@ export const uncommonRelics: RelicDef[] = [
     name: "Bottled Tornado",
     tier: "uncommon",
     pool: "shared",
+    // CardHelper.hasCardType(POWER): any Power in the deck
+    canSpawn: (ctx) => ctx.run.deck.some((mc) => ctx.bundle.cards.get(mc.defId)?.type === "power"),
     onEquip: (ctx) => bottlePickup(ctx, "BOTTLED_TORNADO", "power"),
     hooks: { atBattleStartPreDraw: (ctx) => bottledToTop(ctx, "power") },
   },
   {
-    // "Whenever you obtain a Curse, increase your Max HP by 6." RUN-LAYER site.
+    // "Whenever you obtain a Curse, increase your Max HP by 6."
+    // increaseMaxHp(6, true): the 6 is healed through the heal path.
     id: "DARKSTONE_PERIAPT",
     name: "Darkstone Periapt",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
       onObtainCard: (ctx, defId) => {
-        if (ctx.bundle.cards.get(defId)?.type === "curse") {
-          ctx.run.maxHp += 6;
-          ctx.run.hp += 6;
-        }
+        if (ctx.bundle.cards.get(defId)?.type === "curse") increaseMaxHp(ctx, 6);
       },
     },
   },
@@ -108,7 +128,12 @@ export const uncommonRelics: RelicDef[] = [
     },
   },
   {
-    // "Whenever an enemy dies, gain 1 Energy and draw 1 card."
+    // "Whenever an enemy dies, gain 1 Energy and draw 1 card." Also fires on a
+    // Darkling / Awakened One half-death (the engine notifies those too).
+    // VERIFY-JAR: GremlinHorn checks !areMonstersBasicallyDead(), which skips
+    // the final kill only if AbstractMonster.die flags isDying before telling
+    // the relics; AbstractMonster is missing from the decompile, so the last
+    // kill still pays here.
     id: "GREMLIN_HORN",
     name: "Gremlin Horn",
     tier: "uncommon",
@@ -200,13 +225,16 @@ export const uncommonRelics: RelicDef[] = [
   },
   {
     // "If your HP is at or below 50% at the end of combat, heal 12 HP."
+    // AbstractRoom.endBattle runs its onTrigger BEFORE player.onVictory(), so
+    // the check sees HP before Burning Blood / Black Blood heal.
     id: "MEAT_ON_THE_BONE",
     name: "Meat on the Bone",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
-      onVictory: (ctx) => {
-        if (ctx.run.hp <= ctx.run.maxHp / 2) healPlayer(ctx, 12);
+      onVictoryFirst: (ctx) => {
+        if (ctx.run.hp <= ctx.run.maxHp / 2 && ctx.run.hp > 0) healPlayer(ctx, 12);
       },
     },
   },
@@ -240,14 +268,14 @@ export const uncommonRelics: RelicDef[] = [
     },
   },
   {
-    // "At the start each combat, add 3 Shivs into your hand."
+    // "At the start each combat, add 3 Shivs into your hand." NinjaScroll.atBattleStartPreDraw.
     // DEPENDS: SHIV card def (Silent workstream).
     id: "NINJA_SCROLL",
     name: "Ninja Scroll",
     tier: "uncommon",
     pool: "green",
     hooks: {
-      atBattleStart: (ctx) => {
+      atBattleStartPreDraw: (ctx) => {
         if (ctx.bundle.cards.has("SHIV")) {
           ctx.queue.addToBottom({ kind: "makeTempCard", defId: "SHIV", upgrades: 0, dest: "hand", n: 3 });
         }
@@ -370,12 +398,12 @@ export const uncommonRelics: RelicDef[] = [
     },
   },
   {
-    // "At the start of each combat, Channel 1 Dark." DEPENDS: DARK orb def.
+    // "At the start of each combat, Channel 1 Dark." SymbioticVirus.atPreBattle. DEPENDS: DARK orb def.
     id: "SYMBIOTIC_VIRUS",
     name: "Symbiotic Virus",
     tier: "uncommon",
     pool: "blue",
-    hooks: { atBattleStart: (ctx) => ctx.queue.addToBottom({ kind: "channelOrb", orbId: "DARK" }) },
+    hooks: { atBattleStartPreDraw: (ctx) => ctx.queue.addToBottom({ kind: "channelOrb", orbId: "DARK" }) },
   },
   {
     // "Start each combat in Calm." DEPENDS: CALM stance def (Watcher workstream).
@@ -387,7 +415,7 @@ export const uncommonRelics: RelicDef[] = [
   },
   {
     // "For every 5 cards in your deck, heal 3 HP whenever you enter a Rest Site."
-    // RUN-LAYER: onEnterRestSite not fired yet.
+    // EternalFeather.onEnterRoom(RestRoom); runFlow fires onEnterRestSite.
     id: "ETERNAL_FEATHER",
     name: "Eternal Feather",
     tier: "uncommon",
@@ -401,14 +429,16 @@ export const uncommonRelics: RelicDef[] = [
     name: "Frozen Egg",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
       modifyObtainedCardUpgrades: (ctx, upgrades, defId) =>
         ctx.bundle.cards.get(defId)?.type === "power" ? Math.max(upgrades, 1) : upgrades,
     },
   },
   {
-    // "The next 2 non-boss chests you open contain 2 Relics." RUN-LAYER:
-    // counter initialized on pickup; the chest flow grants queued extras.
+    // "The next 2 non-boss chests you open contain 2 Relics." Matryoshka.onChestOpen
+    // runs before the chest draws its own relic (AbstractChest.open), so its
+    // relicRng tier roll and pool draw come first.
     id: "MATRYOSHKA",
     name: "Matryoshka",
     countsDown: true,
@@ -418,6 +448,7 @@ export const uncommonRelics: RelicDef[] = [
       const r = ctx.run.relics.find((x) => x.defId === "MATRYOSHKA");
       if (r) r.counter = 2;
     },
+    canSpawn: (ctx) => ctx.run.floor <= 40,
     hooks: {
       onChestOpen: (ctx, isBossChest, extraRelics) => {
         if (isBossChest) return;
@@ -426,7 +457,7 @@ export const uncommonRelics: RelicDef[] = [
         const remaining = counter - 1;
         cnt(ctx).set(remaining === 0 ? -2 : remaining);
         const tier = ctx.rng("relicRng").randomBoolean(0.75) ? "common" : "uncommon";
-        extraRelics.push(obtainRelicFromPool(ctx.run, tier));
+        extraRelics.push(obtainRelicFromPool(ctx, tier));
       },
     },
   },
@@ -436,21 +467,19 @@ export const uncommonRelics: RelicDef[] = [
     name: "Molten Egg",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
       modifyObtainedCardUpgrades: (ctx, upgrades, defId) =>
         ctx.bundle.cards.get(defId)?.type === "attack" ? Math.max(upgrades, 1) : upgrades,
     },
   },
   {
-    // "Upon pickup, raise your Max HP by 10."
+    // "Upon pickup, raise your Max HP by 10." increaseMaxHp(10, true).
     id: "PEAR",
     name: "Pear",
     tier: "uncommon",
     pool: "shared",
-    onEquip: (ctx) => {
-      ctx.run.maxHp += 10;
-      ctx.run.hp += 10;
-    },
+    onEquip: (ctx) => increaseMaxHp(ctx, 10),
     hooks: {},
   },
   {
@@ -459,6 +488,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "Question Card",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {},
   },
   {
@@ -467,6 +497,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "Singing Bowl",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {},
   },
   {
@@ -476,6 +507,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "The Courier",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsOutsideShops,
     hooks: { modifyPrice: (_ctx, price) => price * 0.8 },
   },
   {
@@ -484,6 +516,7 @@ export const uncommonRelics: RelicDef[] = [
     name: "Toxic Egg",
     tier: "uncommon",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
       modifyObtainedCardUpgrades: (ctx, upgrades, defId) =>
         ctx.bundle.cards.get(defId)?.type === "skill" ? Math.max(upgrades, 1) : upgrades,

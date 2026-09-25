@@ -18,7 +18,7 @@ import type { GameAction } from "../core/actions";
 import { vetoHook } from "../core/hooks";
 import { PLAYER } from "../core/ids";
 import { ActionQueue } from "../core/queue";
-import { effectiveCost } from "./interpreter";
+import { effectiveCost, isUnplayable } from "./interpreter";
 
 function previewCost(ctx: EffectCtx, card: CardInstance): number {
   if (card.cost < 0) return card.cost;
@@ -51,7 +51,7 @@ export function getCardPlayability(
   if (!def) throw new Error(`unknown card def ${c.defId}`);
   const ctx = previewCtx(isolated, bundle);
   const cost = previewCost(ctx, c);
-  if (c.cost === -2 || (!c.freeToPlayOnce && combat.player.energy < Math.max(0, cost))) {
+  if (isUnplayable(ctx, c) || (!c.freeToPlayOnce && combat.player.energy < Math.max(0, cost))) {
     return { cost, playable: false };
   }
   const targets = needsEnemyTarget(def.target)

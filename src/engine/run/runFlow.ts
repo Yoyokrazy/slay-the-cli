@@ -38,7 +38,7 @@ import {
 } from "./rewards";
 import { generateShop, repriceAfterRelic, restockShopCardSlot, restockShopRelicSlot, restockShopPotionSlot } from "./shop";
 import { setupTreasureRoom, openChestContents, claimChestRelic, claimChestSapphireKey } from "./treasure";
-import { applyRest, applySmith, canSmith } from "./rest";
+import { applyRest, applySmith, canSmith, tokeableIndices } from "./rest";
 import { getNeowOptions, applyNeowBonus, applyNeowDrawback } from "./neow";
 import { enterEventRoom, handleEventOption, handleEventCombatVictory } from "./eventRuntime";
 import { obtainDeckCard, removeDeckCard, transformDeckCard } from "./deck";
@@ -221,7 +221,6 @@ export function initRunState(
       eliteKillsThisAct: 0,
       cardRemovesPurchased: 0,
       lastRoomWasShop: false,
-      tinyChestCounter: 0,
       seenEvents: [],
       turnsThisRun: 0,
     },
@@ -234,34 +233,59 @@ export function initRunState(
 
 // --- ? room resolution -----------------------------------------------------------------
 
-/** getEventRoomOutcomeHelper (GameContext.cpp:2049-2103): one eventRng float,
- *  idx = int(roll*100) vs cumulative int(chance*100) thresholds; the shop share
- *  is 0 right after a shop; chances escalate by their base when not chosen and
- *  reset to base when chosen. Tiny Chest forces every 4th ? room to TREASURE
- *  (bypassing the roll); Juzu Bracelet converts MONSTER to EVENT after the
- *  monster chance has already reset. Exported for direct testing. */
+/** Saves from before Tiny Chest counted on the relic kept the count on
+ *  run.history.tinyChestCounter (same 0..3 meaning). Moves it onto the relic
+ *  once and drops the old field; a no-op for newer saves. */
+export function migrateLegacyRunState(run: RunState): void {
+  const history = run.history as RunState["history"] & { tinyChestCounter?: unknown };
+  if (!("tinyChestCounter" in history)) return;
+  const legacy = history.tinyChestCounter;
+  delete history.tinyChestCounter;
+  const tinyChest = run.relics.find((r) => r.defId === "TINY_CHEST");
+  if (tinyChest && typeof legacy === "number" && Number.isInteger(legacy)) {
+    tinyChest.counter = Math.min(3, Math.max(0, legacy));
+  }
+}
+
+/** EventHelper.roll (EventHelper.java:79-181): "float roll = eventRng.random();"
+ *  is consumed FIRST, every time; then Tiny Chest counts on the relic itself
+ *  (counter++ on every ? room whatever it becomes; the 4th forces TREASURE
+ *  whatever was rolled). The outcome table is a 100-slot array filled MONSTER,
+ *  SHOP, TREASURE from int(chance*100) sizes, each fill clamped to start at
+ *  index 99 at most ("Math.min(99, fillIndex)"), and read at int(roll*100);
+ *  the shop share is 0 right after a shop. Chances escalate by their base when
+ *  not chosen and reset to base when chosen; Juzu Bracelet converts MONSTER to
+ *  EVENT after the monster chance has already reset. Exported for direct
+ *  testing. */
 export function resolveUnknownRoom(ctx: EffectCtx): "monster" | "shop" | "treasure" | "event" {
   const run = ctx.run;
   const b = run.blizzard;
-  let outcome: "monster" | "shop" | "treasure" | "event" | null = null;
+  const roll = ctx.rng("eventRng").randomFloat();
+  let forceChest = false;
 
-  if (hasRelic(run, "TINY_CHEST")) {
-    if (run.history.tinyChestCounter === 3) {
-      run.history.tinyChestCounter = 0;
-      outcome = "treasure";
-    } else {
-      run.history.tinyChestCounter++;
+  const tinyChest = run.relics.find((r) => r.defId === "TINY_CHEST");
+  if (tinyChest) {
+    tinyChest.counter++;
+    if (tinyChest.counter === 4) {
+      tinyChest.counter = 0;
+      forceChest = true;
     }
   }
 
-  if (outcome === null) {
-    const roll = ctx.rng("eventRng").randomFloat();
-    const idx = Math.trunc(f32mul(roll, 100));
-    const monsterSize = Math.trunc(f32mul(b.monsterChance, 100));
-    const shopSize = monsterSize + (run.history.lastRoomWasShop ? 0 : Math.trunc(f32mul(b.shopChance, 100)));
-    const treasureSize = shopSize + Math.trunc(f32mul(b.treasureChance, 100));
-    outcome = idx < monsterSize ? "monster" : idx < shopSize ? "shop" : idx < treasureSize ? "treasure" : "event";
-  }
+  const monsterSize = Math.trunc(f32mul(b.monsterChance, 100));
+  const shopSize = run.history.lastRoomWasShop ? 0 : Math.trunc(f32mul(b.shopChance, 100));
+  const treasureSize = Math.trunc(f32mul(b.treasureChance, 100));
+  const table = new Array<"monster" | "shop" | "treasure" | "event">(100).fill("event");
+  let fillIndex = 0;
+  const fill = (kind: "monster" | "shop" | "treasure", size: number) => {
+    table.fill(kind, Math.min(99, fillIndex), Math.min(100, fillIndex + size));
+    fillIndex += size;
+  };
+  fill("monster", monsterSize);
+  fill("shop", shopSize);
+  fill("treasure", treasureSize);
+  let outcome = table[Math.trunc(f32mul(roll, 100))]!;
+  if (forceChest) outcome = "treasure";
 
   b.monsterChance = outcome === "monster" ? UNKNOWN_ROOM.base.monster : f32add(b.monsterChance, UNKNOWN_ROOM.escalation.monster);
   b.shopChance = outcome === "shop" ? UNKNOWN_ROOM.base.shop : f32add(b.shopChance, UNKNOWN_ROOM.escalation.shop);
@@ -428,6 +452,9 @@ export function handleCombatVictory(state: GameState, ctx: EffectCtx, registry: 
         registry.reseedFloorStreams(run.floor);
         const second = run.pools.bossList[1] ?? run.pools.bossList[0]!;
         clearCombat();
+        // a room transition like any other: onEnterRoom relics (Maw Bank)
+        fireEnterRoom(ctx, "boss");
+        fireHook(ctx, PLAYER, "justEnteredRoom", "boss");
         startCombat(state, ctx, "boss", second, false);
         return;
       }
@@ -445,14 +472,19 @@ export function handleCombatVictory(state: GameState, ctx: EffectCtx, registry: 
     // boss gold uses the boss floor's miscRng, BEFORE the boss treasure room
     const entries = buildCombatRewards(ctx, "boss", false);
     clearCombat();
-    // enterBossTreasureRoom: ++floorNum then reseed floor streams
+    // enterBossTreasureRoom: ++floorNum then reseed floor streams; the
+    // TreasureRoomBoss goes through nextRoomTransition, so onEnterRoom relics
+    // fire for it (Maw Bank pays its 12)
     run.floor++;
     registry.reseedFloorStreams(run.floor);
-    // boss relic choice: 3 from the shuffled boss pool (unchosen are not returned)
+    fireEnterRoom(ctx, "bossTreasure");
+    fireHook(ctx, PLAYER, "justEnteredRoom", "bossTreasure");
+    // boss relic choice: BossChest's 3 x returnRandomRelic(BOSS), canSpawn
+    // included (Ectoplasm only in act 1; unchosen ones are not returned)
     const group = nextRewardGroup(entries);
     for (let i = 0; i < 3; i++) {
-      const id = run.pools.bossRelics.shift();
-      if (id !== undefined) entries.push({ kind: "bossRelic", group, id, taken: false });
+      const id = obtainRelicFromPool(ctx, "boss");
+      entries.push({ kind: "bossRelic", group, id, taken: false });
     }
     run.room = { kind: "rewards", entries, source: "boss" };
     return;
@@ -586,17 +618,21 @@ export function restOptionAvailable(ctx: EffectCtx, kind: RestOptionKind): boole
     case "lift":
       return hasRelic(run, "GIRYA") && (run.relics.find((r) => r.defId === "GIRYA")?.counter ?? 0) < 3;
     case "toke":
-      return hasRelic(run, "PEACE_PIPE") && run.deck.length > 0;
+      // PeacePipe: TokeOption usable only with a purgeable, unbottled card
+      return hasRelic(run, "PEACE_PIPE") && tokeableIndices(run.deck).length > 0;
     case "dig":
       return hasRelic(run, "SHOVEL");
   }
 }
 
-/** Registered as effect "__restToke": Peace Pipe's card removal. */
+/** Registered as effect "__restToke": Peace Pipe's card removal. `chosen`
+ *  holds positions in the offered `indices` (older saves offered the whole
+ *  deck, where positions and deck indices coincide). */
 export function restTokeResume(ctx: EffectCtx, args: unknown): void {
-  const { chosen } = args as { chosen: number[] };
+  const { chosen, indices } = args as { chosen: number[]; indices?: number[] };
   const run = ctx.run;
-  for (const i of [...new Set(chosen)].sort((a, b) => b - a)) {
+  const picked = indices ? chosen.map((p) => indices[p]).filter((i): i is number => i !== undefined) : chosen;
+  for (const i of [...new Set(picked)].sort((a, b) => b - a)) {
     if (!run.deck[i]) throw new Error(`invalid deck index ${i}`);
     removeDeckCard(ctx, i, "rest:toke");
   }
@@ -632,10 +668,16 @@ function noteShopSpend(run: RunState): void {
 
 // --- room entry ---------------------------------------------------------------------------
 
+/** AbstractDungeon.nextRoomTransition: relics' onEnterRoom sees the map
+ *  node's room BEFORE a ? node is rolled, so a ? node reads as "event". */
+function fireEnterRoom(ctx: EffectCtx, nodeKind: string): void {
+  fireHook(ctx, PLAYER, "onEnterRoom", nodeKind === "unknown" ? "event" : nodeKind);
+}
+
 function enterResolvedRoom(state: GameState, ctx: EffectCtx, kind: RoomKind, burning: boolean): void {
   const run = state.run;
   run.history.lastRoomWasShop = kind === "shop";
-  fireHook(ctx, PLAYER, "onEnterRoom", kind);
+  fireHook(ctx, PLAYER, "justEnteredRoom", kind);
   switch (kind) {
     case "monster": {
       let enc = run.pools.monsterList.shift();
@@ -744,6 +786,7 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
       // transitionToMapNode: ++floorNum then reseed floor streams with seed+floorNum
       run.floor++;
       registry.reseedFloorStreams(run.floor);
+      fireEnterRoom(ctx, targetKind);
       const resolved: RoomKind = targetKind === "unknown" ? resolveUnknownRoom(ctx) : targetKind;
       enterResolvedRoom(state, ctx, resolved, burning);
       break;
@@ -822,9 +865,10 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
         run.gold -= slot.price;
         slot.sold = true;
         addRelic(ctx, boughtRelicId);
-        if (courierRestock) restockShopRelicSlot(ctx, slot);
-        // mid-shop reprice (Membership Card immediately halves remaining prices)
+        // StoreRelic.purchaseRelic: Membership Card's applyDiscount runs
+        // before the Courier restock, whose new slot is priced on its own
         repriceAfterRelic(ctx, shop, boughtRelicId);
+        if (courierRestock) restockShopRelicSlot(ctx, slot);
       } else {
         const slot = shop.potions[cmd.idx];
         if (!slot || slot.sold) throw new Error("potion slot unavailable");
@@ -885,10 +929,11 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
         if (g) g.counter += 1;
       } else if (cmd.kind === "dig") {
         // Shovel: returnRandomRelic(returnRandomRelicTier(relicRng, act))
-        addRelic(ctx, obtainRelicFromPool(run, combatRelicTier(ctx)));
+        addRelic(ctx, obtainRelicFromPool(ctx, combatRelicTier(ctx)));
       } else if (cmd.kind === "toke") {
-        // Peace Pipe: one card off the deck, through the same picker Neow uses
-        const indices = run.deck.map((_, i) => i);
+        // Peace Pipe: one card off the deck, bottled cards and the unremovable
+        // curses left out; `chosen` comes back as positions in `indices`
+        const indices = tokeableIndices(run.deck);
         if (indices.length === 0) throw new Error("nothing to remove");
         room.used = true; // the site is spent whichever card is picked
         ctx.requestChoice({
@@ -902,6 +947,7 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
             reason: "rest:toke",
           },
           resume: "__restToke",
+          resumeArgs: { indices },
         });
         break;
       } else {
@@ -915,14 +961,26 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
 
     case "openChest": {
       if (room.kind !== "treasure") throw new Error("not in a treasure room");
-      const contents = openChestContents(ctx, room.chest);
+      // AbstractChest.open: relics' onChestOpen first (Matryoshka's extra
+      // relics come off the pools BEFORE the chest's own; Cursed Key's curse),
+      // then the gold, then the chest relic and its Sapphire Key link, then
+      // onChestOpenAfter (N'loth's Hungry Face removes the first relic reward)
       const extraRelics: RelicId[] = [];
       fireHook(ctx, PLAYER, "onChestOpen", false, extraRelics);
+      const contents = openChestContents(ctx, room.chest);
+      const rewards = { extras: extraRelics, chestRelic: contents.relicId };
+      fireHook(ctx, PLAYER, "onChestOpenAfter", false, rewards);
       if (contents.gold > 0) gainGold(ctx, contents.gold);
-      if (!contents.pendingChoice && contents.relicId) addRelic(ctx, contents.relicId);
+      if (rewards.chestRelic === null) {
+        // the chest relic went, and its linked Sapphire Key with it
+        room.chest.pendingRelicId = null;
+        room.chest.sapphireKeyAvailable = false;
+      } else if (!contents.pendingChoice) {
+        addRelic(ctx, rewards.chestRelic);
+      }
       // Sapphire Key replaces only the chest's main relic; Matryoshka extras
       // still ride the same auto-grant path as ordinary chest relics here.
-      for (const id of extraRelics) addRelic(ctx, id);
+      for (const id of rewards.extras) addRelic(ctx, id);
       break;
     }
 

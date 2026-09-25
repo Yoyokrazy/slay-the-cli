@@ -12,6 +12,8 @@ import type { GameState } from "../game";
 import type { RngRegistry } from "../core/rngRegistry";
 import { buildCombatState, initializeCombat } from "../combat/setup";
 import { runQueue } from "../combat/interpreter";
+import { fireHook } from "../core/hooks";
+import { PLAYER } from "../core/ids";
 
 /** Fire the event's one-time setup (rolls stored into room.data). */
 export function enterEventRoom(ctx: EffectCtx): void {
@@ -75,9 +77,12 @@ function makeEventServices(state: GameState, ctx: EffectCtx, registry: RngRegist
     goToBoss(): void {
       const run = state.run;
       const bossId = run.map!.bossId;
-      // mirror the boss-door transition: ++floor, reseed floor streams, boss combat
+      // mirror the boss-door transition: ++floor, reseed floor streams, the
+      // room-entry relic hooks (Maw Bank), boss combat
       run.floor++;
       registry.reseedFloorStreams(run.floor);
+      fireHook(ctx, PLAYER, "onEnterRoom", "boss");
+      fireHook(ctx, PLAYER, "justEnteredRoom", "boss");
       const character = ctx.bundle.characters.get(run.character)!;
       const combat = buildCombatState(run, ctx.bundle, bossId, [bossId], character.startingEnergy, character.orbSlots, "boss");
       state.combat = combat;

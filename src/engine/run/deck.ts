@@ -2,15 +2,18 @@ import type { EffectCtx, MasterDeckRemovalReason } from "../content/defs";
 import type { CardId } from "../core/ids";
 import type { MasterCard } from "./runState";
 import { PLAYER } from "../core/ids";
-import { foldHook, vetoHook } from "../core/hooks";
+import { fireHook, foldHook, vetoHook } from "../core/hooks";
 import { classCardPool } from "./rewards";
 
 export function obtainedCardUpgrades(ctx: EffectCtx, defId: CardId, upgrades: number): number {
   return Math.max(0, Math.floor(foldHook(ctx, PLAYER, "modifyObtainedCardUpgrades", upgrades, defId)));
 }
 
+/** ShowCardAndObtainEffect: Omamori negates before any relic's onObtainCard
+ *  runs, so a negated curse pays no Ceramic Fish gold and no Darkstone HP. */
 export function obtainDeckCard(ctx: EffectCtx, defId: CardId, upgrades = 0, misc = 0): boolean {
-  if (!vetoHook(ctx, PLAYER, "onObtainCard", defId)) return false;
+  if (!vetoHook(ctx, PLAYER, "canObtainCard", defId)) return false;
+  fireHook(ctx, PLAYER, "onObtainCard", defId);
   const finalUpgrades = obtainedCardUpgrades(ctx, defId, upgrades);
   ctx.run.deck.push({ defId, upgrades: finalUpgrades, misc, bottled: false });
   return true;

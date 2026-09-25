@@ -58,15 +58,15 @@ describe("Empty Cage", () => {
     expect(deckIds(s).filter((id) => id === "STRIKE_RED").length).toBe(4);
   });
 
-  test("the pick skips bottled cards, and the choice indexes the offered list", () => {
+  test("the pick offers bottled cards too (EmptyCage uses getPurgeableCards, no bottle filter)", () => {
     let s = takeBossRelic("PICK2", "EMPTY_CAGE", { mutate: (g) => (g.run.deck[0]!.bottled = true) });
     const req = s.pending!.request;
     if (req.kind !== "cards") throw new Error("unreachable");
-    expect(req.iids).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(req.iids).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-    s = advance(s, { cmd: "choose", indices: [0, 1] }, bundle); // the first two OFFERED
+    s = advance(s, { cmd: "choose", indices: [1, 2] }, bundle); // positions in the offered list
     expect(s.run.deck.length).toBe(8);
-    expect(s.run.deck[0]!.bottled).toBe(true); // the bottled Strike survived
+    expect(s.run.deck[0]!.bottled).toBe(true); // the bottled Strike was not picked
     expect(deckIds(s).filter((id) => id === "STRIKE_RED").length).toBe(3);
   });
 
@@ -251,17 +251,17 @@ describe("the bottles", () => {
     expect(bottledIdxs(s)).toEqual([10]);
   });
 
-  test("a bottled card is still what a removal screen refuses to touch", () => {
+  test("Empty Cage still offers a bottled card (only the unremovable curses are left out)", () => {
     let s = takeRelicReward("BOT5", "BOTTLED_FLAME");
     s = advance(s, { cmd: "choose", indices: [0] }, bundle); // the first Strike
     expect(bottledIdxs(s)).toEqual([0]);
 
-    // Empty Cage offers the other nine (events/lib.ts removableIndices)
+    // EmptyCage.onEquip grids over masterDeck.getPurgeableCards(): no bottle filter
     s.run.room = { kind: "rewards", entries: [{ kind: "bossRelic", group: 0, id: "EMPTY_CAGE", taken: false }], source: "boss" };
     s = advance(s, { cmd: "takeReward", i: 0 }, bundle);
     const req = s.pending!.request;
     if (req.kind !== "cards") throw new Error("unreachable");
-    expect(req.iids).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(req.iids).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 });
 

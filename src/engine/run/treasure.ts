@@ -46,9 +46,8 @@ export interface ChestContents {
 
 /** openTreasureRoomChest: gold amount = round(random(base*0.9, base*1.1)),
  *  then the relic is determined and either granted immediately or left pending
- *  as the Sapphire Key's linked alternative.
- *  TODO relic content hooks: NLOTHS_HUNGRY_FACE. Matryoshka is handled by
- *  onChestOpen in runFlow after the chest's main relic is determined. */
+ *  as the Sapphire Key's linked alternative. The relic hooks (Matryoshka and
+ *  Cursed Key before, N'loth's Hungry Face after) run around this in runFlow. */
 export function openChestContents(ctx: EffectCtx, chest: ChestState): ChestContents {
   if (chest.opened) throw new Error("chest already opened");
   chest.opened = true;
@@ -58,7 +57,7 @@ export function openChestContents(ctx: EffectCtx, chest: ChestState): ChestConte
     gold = Math.round(ctx.rng("treasureRng").randomFloatRange(base * CHESTS.goldJitter.min, base * CHESTS.goldJitter.max));
   }
   // the relic identity is determined (shown) either way; taking the key forfeits it
-  const relicId = obtainRelicFromPool(ctx.run, chest.relicTier);
+  const relicId = obtainRelicFromPool(ctx, chest.relicTier);
   if (chest.sapphireKeyAvailable) {
     chest.pendingRelicId = relicId;
     return { gold, relicId, pendingChoice: true };

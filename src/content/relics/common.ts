@@ -6,9 +6,12 @@
 //   // ENGINE-GAP - not expressible with current hooks; def is a marker.
 //   // DEPENDS - needs content from another workstream (guarded).
 
-import type { RelicDef } from "../../engine/content/defs";
+import type { EffectCtx, RelicDef } from "../../engine/content/defs";
 import { PLAYER, monster } from "../../engine/core/ids";
-import { cnt, gainGold, healPlayer, relicDamageAll } from "./lib";
+import { f32mul } from "../../engine/core/math";
+import { JavaRandom, javaShuffle } from "../../engine/core/rng";
+import { canSmith } from "../../engine/run/rest";
+import { cnt, gainGold, healPlayer, increaseMaxHp, relicDamageAll, spawnsOutsideShops, spawnsUpToFloor } from "./lib";
 
 export const commonRelics: RelicDef[] = [
   {
@@ -51,11 +54,12 @@ export const commonRelics: RelicDef[] = [
   },
   {
     // "Whenever you enter a Rest Site, start the next combat with 2 extra Energy."
-    // RUN-LAYER: onEnterRestSite is not fired yet; combat side consumes the flag.
+    // onEnterRestRoom banks it; the next combat's first turn spends it.
     id: "ANCIENT_TEA_SET",
     name: "Ancient Tea Set",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
       onEnterRestSite: (ctx) => cnt(ctx).set(1),
       atStartOfTurn: (ctx) => {
@@ -89,12 +93,13 @@ export const commonRelics: RelicDef[] = [
     },
   },
   {
-    // "At the start of each combat, draw 2 additional cards."
+    // "At the start of each combat, draw 2 additional cards." Its own
+    // DrawCardAction, queued behind the opening draw (BagOfPreparation.atBattleStart).
     id: "BAG_OF_PREPARATION",
     name: "Bag of Preparation",
     tier: "common",
     pool: "shared",
-    hooks: { modifyDrawPerTurn: (ctx, n) => (ctx.combat!.turn === 1 ? n + 2 : n) },
+    hooks: { atBattleStart: (ctx) => ctx.queue.addToBottom({ kind: "draw", n: 2 }) },
   },
   {
     // "At the start of each combat, heal 2 HP."
@@ -116,7 +121,8 @@ export const commonRelics: RelicDef[] = [
     },
   },
   {
-    // "The first time you lose HP each combat, draw 3 cards."
+    // "The first time you lose HP each combat, draw 3 cards." addToTop: the
+    // draw resolves before whatever the hit's source queued next.
     id: "CENTENNIAL_PUZZLE",
     name: "Centennial Puzzle",
     tier: "common",
@@ -126,7 +132,7 @@ export const commonRelics: RelicDef[] = [
       wasHPLost: (ctx, _info, amount) => {
         if (amount > 0 && cnt(ctx).get() === 0) {
           cnt(ctx).set(1);
-          ctx.queue.addToBottom({ kind: "draw", n: 3 });
+          ctx.queue.addToTop({ kind: "draw", n: 3 });
         }
       },
     },
@@ -137,6 +143,7 @@ export const commonRelics: RelicDef[] = [
     name: "Ceramic Fish",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: { onObtainCard: (ctx) => void gainGold(ctx, 9) },
   },
   {
@@ -160,11 +167,12 @@ export const commonRelics: RelicDef[] = [
   },
   {
     // "Whenever you Rest, you may add a card to your deck."
-    // RUN-LAYER: needs the rest-site card-reward flow.
+    // CampfireSleepEffect opens getRewardCards() after the heal (runFlow's rest).
     id: "DREAM_CATCHER",
     name: "Dream Catcher",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {},
   },
   {
@@ -191,6 +199,7 @@ export const commonRelics: RelicDef[] = [
     name: "Juzu Bracelet",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {},
   },
   {
@@ -207,12 +216,14 @@ export const commonRelics: RelicDef[] = [
   },
   {
     // "Whenever you climb a floor, gain 12 Gold. No longer works when you spend
-    // any Gold at a shop." runFlow's noteShopSpend sets counter=1 on any shop
-    // purchase or removal to use it up.
+    // any Gold at a shop." onEnterRoom fires on every room transition, the
+    // boss chest room included. runFlow's noteShopSpend sets counter=1 on any
+    // shop purchase or removal to use it up.
     id: "MAW_BANK",
     name: "Maw Bank",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsOutsideShops,
     hooks: {
       onEnterRoom: (ctx) => {
         if (cnt(ctx).get() === 0) gainGold(ctx, 12);
@@ -220,13 +231,15 @@ export const commonRelics: RelicDef[] = [
     },
   },
   {
-    // "Whenever you enter a shop, heal 15 HP." RUN-LAYER site.
+    // "Whenever you enter a shop, heal 15 HP." MealTicket.justEnteredRoom: the
+    // resolved room, so a ? node that rolls a shop counts.
     id: "MEAL_TICKET",
     name: "Meal Ticket",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {
-      onEnterRoom: (ctx, roomKind) => {
+      justEnteredRoom: (ctx, roomKind) => {
         if (roomKind === "shop") healPlayer(ctx, 15);
       },
     },
@@ -268,12 +281,14 @@ export const commonRelics: RelicDef[] = [
     countsDown: true,
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     onEquip: (ctx) => {
       const r = ctx.run.relics.find((x) => x.defId === "OMAMORI");
       if (r) r.counter = 2;
     },
     hooks: {
-      onObtainCard: (ctx, defId) => {
+      // ShowCardAndObtainEffect negates before any onObtainCard relic runs
+      canObtainCard: (ctx, defId) => {
         if (ctx.bundle.cards.get(defId)?.type === "curse" && cnt(ctx).get() > 0) {
           cnt(ctx).set(cnt(ctx).get() - 1);
           return false; // veto the obtain
@@ -331,16 +346,22 @@ export const commonRelics: RelicDef[] = [
     },
   },
   {
-    // "Enemies in Elite combats have 25% less HP." (current HP reduced at spawn)
+    // "Enemies in Elite combats have 25% less HP." PreservedInsect.atBattleStart:
+    // runs after the pre-battle setup and the burning-elite max HP buff, and
+    // caps current HP at (int)(maxHealth * 0.75f).
     id: "PRESERVED_INSECT",
     name: "Preserved Insect",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(52),
     hooks: {
-      atBattleStartPreDraw: (ctx) => {
+      atBattleStart: (ctx) => {
         const isElite = ctx.combat!.monsters.some((m) => ctx.bundle.monsters.get(m.id)?.category === "elite");
         if (!isElite) return;
-        for (const m of ctx.combat!.monsters) m.hp = Math.floor(m.hp * 0.75);
+        for (const m of ctx.combat!.monsters) {
+          const cap = Math.trunc(f32mul(m.maxHp, 0.75));
+          if (m.hp > cap) m.hp = cap;
+        }
       },
     },
   },
@@ -350,6 +371,7 @@ export const commonRelics: RelicDef[] = [
     name: "Potion Belt",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     onEquip: (ctx) => {
       ctx.run.potionSlots += 2;
       ctx.run.potions.push(null, null);
@@ -362,6 +384,7 @@ export const commonRelics: RelicDef[] = [
     name: "Regal Pillow",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: { onRest: (ctx) => healPlayer(ctx, 15) },
   },
   {
@@ -383,13 +406,13 @@ export const commonRelics: RelicDef[] = [
       onBloodied: (ctx) => {
         if (cnt(ctx).get() === 0) {
           cnt(ctx).set(1);
-          ctx.queue.addToBottom({ kind: "applyPower", source: PLAYER, target: PLAYER, powerId: "STRENGTH", amount: 3 });
+          ctx.queue.addToTop({ kind: "applyPower", source: PLAYER, target: PLAYER, powerId: "STRENGTH", amount: 3 });
         }
       },
       onNotBloodied: (ctx) => {
         if (cnt(ctx).get() === 1) {
           cnt(ctx).set(0);
-          ctx.queue.addToBottom({
+          ctx.queue.addToTop({
             kind: "applyPower",
             source: PLAYER,
             target: PLAYER,
@@ -407,6 +430,7 @@ export const commonRelics: RelicDef[] = [
     name: "Smiling Mask",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsOutsideShops,
     hooks: {},
   },
   {
@@ -432,21 +456,19 @@ export const commonRelics: RelicDef[] = [
     },
   },
   {
-    // "Upon pickup, raise your Max HP by 7."
+    // "Upon pickup, raise your Max HP by 7." increaseMaxHp(7, true) heals the 7.
     id: "STRAWBERRY",
     name: "Strawberry",
     tier: "common",
     pool: "shared",
-    onEquip: (ctx) => {
-      ctx.run.maxHp += 7;
-      ctx.run.hp += 7;
-    },
+    onEquip: (ctx) => increaseMaxHp(ctx, 7),
     hooks: {},
   },
   {
     // "Whenever you would deal 4 or less unblocked Attack damage, increase it to 5."
-    // ENGINE-GAP: needs a relic-stage atDamageFinalGive fold (the damage calc only
-    // folds relics at the pre-Strength atDamageGive stage).
+    // ENGINE-GAP / VERIFY-JAR: Boot.onAttackToChangeDamage is post-block and is
+    // called from AbstractMonster.damage, which is missing from the decompile;
+    // the monster-side call site and its order are unverified, so no hook here.
     id: "THE_BOOT",
     name: "The Boot",
     tier: "common",
@@ -454,11 +476,12 @@ export const commonRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Every 4th ? room is a Treasure room." RUN-LAYER (uses history.tinyChestCounter).
+    // "Every 4th ? room is a Treasure room." RUN-LAYER (resolveUnknownRoom counts on this relic's counter).
     id: "TINY_CHEST",
     name: "Tiny Chest",
     tier: "common",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(35),
     hooks: {},
   },
   {
@@ -486,8 +509,10 @@ export const commonRelics: RelicDef[] = [
     },
   },
   {
-    // "Upon pick up, Upgrade 2 random Skills."
-    // miscRng per the game's WarPaint implementation.
+    // "Upon pick up, Upgrade 2 random Skills." WarPaint.onEquip: the
+    // upgradeable Skills in deck order, Collections.shuffle'd with a
+    // java.util.Random seeded off ONE miscRng.randomLong() (drawn even when
+    // there is nothing to upgrade), first two upgraded.
     id: "WAR_PAINT",
     name: "War Paint",
     tier: "common",
@@ -496,7 +521,7 @@ export const commonRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Upon pickup, Upgrade 2 random Attacks."
+    // "Upon pickup, Upgrade 2 random Attacks." Whetstone.onEquip, same draw.
     id: "WHETSTONE",
     name: "Whetstone",
     tier: "common",
@@ -506,18 +531,11 @@ export const commonRelics: RelicDef[] = [
   },
 ];
 
-function upgradeRandomDeckCards(
-  ctx: import("../../engine/content/defs").EffectCtx,
-  type: "attack" | "skill",
-  n: number,
-): void {
-  const candidates = ctx.run.deck.filter((mc) => {
-    const def = ctx.bundle.cards.get(mc.defId);
-    return def?.type === type && mc.upgrades === 0;
-  });
-  const rng = ctx.rng("miscRng");
-  for (let i = 0; i < n && candidates.length > 0; i++) {
-    const idx = rng.random(candidates.length - 1);
-    candidates.splice(idx, 1)[0]!.upgrades = 1;
-  }
+function upgradeRandomDeckCards(ctx: EffectCtx, type: "attack" | "skill", n: number): void {
+  // canUpgrade(): Searing Blow stays upgradeable
+  const upgradable = ctx.run.deck
+    .map((_, i) => i)
+    .filter((i) => canSmith(ctx, i) && ctx.bundle.cards.get(ctx.run.deck[i]!.defId)?.type === type);
+  javaShuffle(upgradable, new JavaRandom(ctx.rng("miscRng").randomLong()));
+  for (const i of upgradable.slice(0, n)) ctx.run.deck[i]!.upgrades++;
 }

@@ -175,7 +175,7 @@ const colosseum: EventDef = {
       ctx,
       eventCombatRewards(ctx, {
         gold: 100,
-        relics: [obtainRelicFromPool(ctx.run, "rare"), obtainRelicFromPool(ctx.run, "uncommon")],
+        relics: [obtainRelicFromPool(ctx, "rare"), obtainRelicFromPool(ctx, "uncommon")],
         potionRoll: true,
         cardRoom: "elite",
       }),

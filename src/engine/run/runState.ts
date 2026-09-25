@@ -204,7 +204,6 @@ export interface RunState {
     eliteKillsThisAct: number;
     cardRemovesPurchased: number; // drives removal price 75 + 25n
     lastRoomWasShop: boolean;
-    tinyChestCounter: number;
     seenEvents: EventId[];
     turnsThisRun: number;
     /** A20: the second act-3 boss has been queued/fought */

@@ -9,3 +9,6 @@ export const f32add = (a: number, b: number): number => Math.fround(Math.fround(
 export const f32sub = (a: number, b: number): number => Math.fround(Math.fround(a) - Math.fround(b));
 
 export const clamp = (x: number, lo: number, hi: number): number => (x < lo ? lo : x > hi ? hi : x);
+
+/** libGDX MathUtils.round(float): (int)(x + 16384.5f) - 16384, in float32. */
+export const mathUtilsRound = (x: number): number => Math.trunc(Math.fround(Math.fround(x) + 16384.5)) - 16384;

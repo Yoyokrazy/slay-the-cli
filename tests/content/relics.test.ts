@@ -6,13 +6,15 @@ import { RngRegistry } from "../../src/engine/core/rngRegistry";
 import { ActionQueue } from "../../src/engine/core/queue";
 import { PLAYER, monster } from "../../src/engine/core/ids";
 import { runQueue } from "../../src/engine/combat/interpreter";
-import { previewCardAt } from "../../src/engine/combat/preview";
+import { getCardPlayability, previewCardAt } from "../../src/engine/combat/preview";
 import { makeTestBundle } from "../helpers/testBundle";
 import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
 import { statusCards } from "../../src/content/cards/ironclad/index";
+import { curseCards } from "../../src/content/cards/curses";
 import { allRelics, relicSupportPowers } from "../../src/content/relics";
 import { allPotions } from "../../src/content/potions";
+import { obtainDeckCard } from "../../src/engine/run/deck";
 
 // ---------------------------------------------------------------------------
 // local bundle: makeTestBundle + core powers + this workstream's defs + extras
@@ -45,6 +47,18 @@ const extraCards: CardDef[] = [
     id: "T_CURSE", name: "T Curse", color: "curse", type: "curse", rarity: "special", cost: -2, target: "none",
     values: {}, upgradeValues: {}, keywords: [],
   },
+  {
+    id: "T_HEAL_POWER", name: "T Heal Power", color: "red", type: "power", rarity: "rare", cost: 1, target: "self",
+    values: {}, upgradeValues: {}, keywords: ["tag:healing"],
+  },
+  {
+    id: "T_HEAL_COLORLESS", name: "T Heal Colorless", color: "colorless", type: "skill", rarity: "uncommon", cost: 1,
+    target: "self", values: {}, upgradeValues: {}, keywords: ["tag:healing"],
+  },
+  {
+    id: "T_X_ATTACK", name: "T X Attack", color: "red", type: "attack", rarity: "common", cost: -1, target: "enemy",
+    values: { damage: 4 }, upgradeValues: {}, keywords: [], primitives: [{ do: "damage", n: "damage" }],
+  },
 ];
 
 const tElite: MonsterDef = {
@@ -59,6 +73,51 @@ const tBoss: MonsterDef = {
   hp: () => [50, 50],
   moves: { WAIT: { id: "WAIT", intent: "unknown", execute: () => {} } },
   getMove: () => "WAIT",
+};
+
+/** Elite whose pre-battle setup raises its max HP (like the burning-elite buff). */
+const tBuffedElite: MonsterDef = {
+  id: "T_BUFFED_ELITE", name: "T Buffed Elite", category: "elite",
+  hp: () => [40, 40],
+  preBattle: (_ctx, m) => {
+    m.maxHp += 20;
+    m.hp += 20;
+  },
+  moves: { WAIT: { id: "WAIT", intent: "unknown", execute: () => {} } },
+  getMove: () => "WAIT",
+};
+
+const tBuffedNormal: MonsterDef = { ...tBuffedElite, id: "T_BUFFED_NORMAL", name: "T Buffed Normal", category: "normal" };
+
+/** First death is a half-death (Darkling / Awakened One style corpse). */
+const tPhoenix: MonsterDef = {
+  id: "T_PHOENIX", name: "T Phoenix", category: "normal",
+  hp: () => [10, 10],
+  moves: { WAIT: { id: "WAIT", intent: "unknown", execute: () => {} } },
+  getMove: () => "WAIT",
+  onDeath: (_ctx, self) => {
+    if (self.data.reborn) return;
+    self.data.reborn = true;
+    self.isDead = false;
+    self.halfDead = true;
+  },
+};
+
+/** Hits for 5, then its move adds a Wound to the hand. */
+const tWounder: MonsterDef = {
+  id: "T_WOUNDER", name: "T Wounder", category: "normal",
+  hp: () => [50, 50],
+  moves: {
+    HIT: {
+      id: "HIT",
+      intent: "attack",
+      execute: (ctx, self) => {
+        ctx.queue.addToBottom({ kind: "damage", target: PLAYER, info: { type: "attack", source: monster(self.idx), amount: 5 } });
+        ctx.queue.addToBottom({ kind: "makeTempCard", defId: "WOUND", upgrades: 0, dest: "hand", n: 1 });
+      },
+    },
+  },
+  getMove: () => "HIT",
 };
 
 const stances: StanceDef[] = [
@@ -77,8 +136,10 @@ function makeBundle(): ContentBundle {
   for (const r of allRelics) b.relics.set(r.id, r);
   for (const p of allPotions) b.potions.set(p.id, p);
   for (const c of [...extraCards, ...ironcladBasics, ...statusCards]) b.cards.set(c.id, c);
+  for (const c of curseCards) if (c.id === "NECRONOMICURSE" || c.id === "INJURY") b.cards.set(c.id, c);
   b.monsters.set(tElite.id, tElite);
   b.monsters.set(tBoss.id, tBoss);
+  for (const m of [tBuffedElite, tBuffedNormal, tPhoenix, tWounder]) b.monsters.set(m.id, m);
   for (const s of stances) b.stances.set(s.id, s);
   return b;
 }
@@ -871,6 +932,22 @@ describe("card-lifecycle relics", () => {
     expect(power(s, "FRAIL")).toBeUndefined();
   });
 
+  test("Orange Pellets: resolves after the card (negative Strength is a debuff) and re-arms the same turn", () => {
+    const deck = [{ defId: "T_JAB" }, { defId: "T_CANTRIP" }, { defId: "T_POWER" }];
+    let s = game({ deck: [...deck, ...deck], relics: ["ORANGE_PELLETS"] });
+    s.combat!.player.powers.push({ id: "STRENGTH", amount: -2, justApplied: false, data: null });
+    s = play(s, "T_JAB", 0);
+    s = play(s, "T_CANTRIP");
+    s = play(s, "T_POWER"); // its +1 Strength lands first: -1, still a debuff, then cleared
+    expect(power(s, "STRENGTH")).toBeUndefined();
+    s.combat!.player.powers.push({ id: "WEAK", amount: 2, justApplied: false, data: null });
+    while (!handNames(s).includes("T_JAB") || !handNames(s).includes("T_POWER")) s = play(s, "T_CANTRIP");
+    s = play(s, "T_JAB", 0);
+    if (handNames(s).includes("T_CANTRIP")) s = play(s, "T_CANTRIP");
+    s = play(s, "T_POWER");
+    expect(power(s, "WEAK")).toBeUndefined(); // second full set, same turn
+  });
+
   test("Duality: attacks grant 1 temporary Dexterity", () => {
     let s = game({ deck: jabs(12), relics: ["DUALITY"] });
     s = play(s, "T_JAB", 0);
@@ -932,11 +1009,31 @@ describe("choice relics", () => {
     expect(handNames(s)).toContain("T_COLORLESS");
   });
 
-  test("Nilry's Codex is inert (ENGINE-GAP: mid-sequence choices)", () => {
+  test("Nilry's Codex: end of turn offers 3 distinct class cards (skippable), pick shuffles into draw", () => {
     let s = game({ deck: strikes(12), relics: ["NILRYS_CODEX"] });
     s = advance(s, { cmd: "endTurn" }, B);
+    expect(s.pending).not.toBeNull();
+    const req = s.pending!.request as { kind: string; options: string[]; reason: string };
+    expect(req.kind).toBe("option");
+    expect(req.reason).toBe("Nilry's Codex");
+    expect(req.options.length).toBe(4);
+    expect(req.options[3]).toBe("Skip");
+    expect(new Set(req.options.slice(0, 3)).size).toBe(3);
+    expect(req.options).not.toContain("T Heal Power"); // HEALING cards never generated in combat
+    const drawBefore = s.combat!.player.piles.draw.length;
+    s = advance(s, { cmd: "choose", indices: [0] }, B);
     expect(s.pending).toBeNull();
     expect(s.combat!.turn).toBe(2);
+    const created = Object.values(s.combat!.cards).filter((c) => c.masterIdx === null);
+    expect(created.length).toBe(1);
+    // shuffled into the draw pile before the monster turn; turn 2 then drew 5 of those
+    expect(s.combat!.player.piles.draw.length + s.combat!.player.piles.hand.length).toBe(drawBefore + 1);
+    // Skip adds nothing
+    let t = game({ deck: strikes(12), relics: ["NILRYS_CODEX"] });
+    t = advance(t, { cmd: "endTurn" }, B);
+    t = advance(t, { cmd: "choose", indices: [3] }, B);
+    expect(Object.values(t.combat!.cards).filter((c) => c.masterIdx === null).length).toBe(0);
+    expect(t.combat!.turn).toBe(2);
   });
 });
 
@@ -984,11 +1081,11 @@ describe("hook-side-only relics (engine call site pending)", () => {
     expect(relicCounter(s, "OMAMORI")).toBe(2);
     const rs = s.run.relics.find((r) => r.defId === "OMAMORI")!;
     const hctx = { ...ctx, owner: PLAYER, relicCounter: { get: () => rs.counter, set: (n: number) => (rs.counter = n) } };
-    expect(omamori.hooks.onObtainCard!(hctx, "T_CURSE")).toBe(false);
+    expect(omamori.hooks.canObtainCard!(hctx, "T_CURSE")).toBe(false);
     expect(rs.counter).toBe(1);
-    expect(omamori.hooks.onObtainCard!(hctx, "T_STRIKE")).toBeUndefined();
-    expect(omamori.hooks.onObtainCard!(hctx, "T_CURSE")).toBe(false);
-    expect(omamori.hooks.onObtainCard!(hctx, "T_CURSE")).toBeUndefined(); // charges spent
+    expect(omamori.hooks.canObtainCard!(hctx, "T_STRIKE")).toBeUndefined();
+    expect(omamori.hooks.canObtainCard!(hctx, "T_CURSE")).toBe(false);
+    expect(omamori.hooks.canObtainCard!(hctx, "T_CURSE")).toBeUndefined(); // charges spent
   });
 });
 
@@ -1010,5 +1107,260 @@ describe("marker/paper relics feed the core power defs", () => {
     const hp0 = s.run.hp;
     s = advance(s, { cmd: "endTurn" }, B);
     expect(s.run.hp).toBe(hp0 - 12); // floor(10 * 1.25)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Java fidelity: behaviours pinned against the decompiled relic classes.
+// ---------------------------------------------------------------------------
+
+describe("java fidelity: combat-start timing", () => {
+  test("Mark of Pain: the Wounds land after the opening draw (MarkOfPain.atBattleStart addToBot)", () => {
+    for (let i = 0; i < 8; i++) {
+      const s = game({ seed: `MOP${i}`, deck: strikes(5), relics: ["MARK_OF_PAIN"] });
+      expect(handNames(s)).toEqual(Array(5).fill("T_STRIKE"));
+      const draw = s.combat!.player.piles.draw.map((iid) => s.combat!.cards[iid]!.defId);
+      expect(draw).toEqual(["WOUND", "WOUND"]);
+    }
+  });
+
+  test("Bag of Preparation draws its 2 in relic order with Mark of Pain", () => {
+    // Mark of Pain first: its Wounds are in the pile when the extra draw runs
+    const painFirst = game({ deck: strikes(5), relics: ["MARK_OF_PAIN", "BAG_OF_PREPARATION"] });
+    expect(handNames(painFirst).filter((n) => n === "WOUND").length).toBe(2);
+    expect(handNames(painFirst).slice(0, 5)).toEqual(Array(5).fill("T_STRIKE"));
+    // Bag first: the extra draw finds an empty pile, the Wounds come after
+    const bagFirst = game({ deck: strikes(5), relics: ["BAG_OF_PREPARATION", "MARK_OF_PAIN"] });
+    expect(handNames(bagFirst)).toEqual(Array(5).fill("T_STRIKE"));
+    expect(bagFirst.combat!.player.piles.draw.length).toBe(2);
+  });
+
+  test("Preserved Insect caps HP after the pre-battle max HP buff, off maxHealth", () => {
+    const s = game({ deck: strikes(5), relics: ["PRESERVED_INSECT"], monsters: ["T_BUFFED_ELITE"] });
+    expect(s.combat!.monsters[0]!.maxHp).toBe(60);
+    expect(monsterHp(s)).toBe(45); // (int)(60 * 0.75f), not 40*0.75 + 20
+  });
+
+  test("Neow's Lament is an atBattleStart hook (runs after pre-battle setup)", () => {
+    const def = B.relics.get("NEOWS_LAMENT")!;
+    expect(def.hooks.atBattleStartPreDraw).toBeUndefined();
+    const s = game({ deck: strikes(5), relics: ["NEOWS_LAMENT"], monsters: ["T_BUFFED_NORMAL"] });
+    expect(monsterHp(s)).toBe(60); // counter 0: inert
+    const ctx = makeCtx(s);
+    const r = s.run.relics[0]!;
+    r.counter = 3;
+    def.hooks.atBattleStart!({ ...ctx, owner: PLAYER, relicCounter: { get: () => r.counter, set: (n) => (r.counter = n) } });
+    expect(monsterHp(s)).toBe(1);
+    expect(r.counter).toBe(2);
+  });
+
+  test("Toolbox resolves before the opening draw; HEALING colorless cards never offered", () => {
+    let s = game({ deck: strikes(12), relics: ["TOOLBOX"] });
+    expect(s.pending).not.toBeNull();
+    expect(s.combat!.player.piles.hand.length).toBe(0);
+    expect((s.pending!.request as { options: string[] }).options).toEqual(["T Colorless"]);
+    s = advance(s, { cmd: "choose", indices: [0] }, B);
+    expect(handNames(s)).toEqual(["T_COLORLESS", ...Array(5).fill("T_STRIKE")]);
+  });
+
+  test("Enchiridion adds its Power before the draw, never a HEALING card", () => {
+    for (let i = 0; i < 10; i++) {
+      const s = game({ seed: `ENCH${i}`, deck: strikes(12), relics: ["ENCHIRIDION"] });
+      expect(handNames(s)[0]).toBe("T_POWER");
+      expect(handNames(s)).not.toContain("T_HEAL_POWER");
+      const c = s.combat!.cards[s.combat!.player.piles.hand[0]!]!;
+      expect(c.costForTurn).toBe(0);
+    }
+  });
+
+  test("Warped Tongs upgrades a card of the drawn hand, off shuffleRng (not miscRng)", () => {
+    const withTongs = game({ deck: jabs(10), relics: ["WARPED_TONGS"] });
+    const hand = withTongs.combat!.player.piles.hand.map((iid) => withTongs.combat!.cards[iid]!);
+    expect(hand.length).toBe(5);
+    expect(hand.filter((c) => c.upgrades === 1).length).toBe(1);
+    const without = game({ deck: jabs(10), relics: [] });
+    expect(JSON.stringify(withTongs.rng.floor.miscRng)).toBe(JSON.stringify(without.rng.floor.miscRng));
+    expect(JSON.stringify(withTongs.rng.floor.shuffleRng)).not.toBe(JSON.stringify(without.rng.floor.shuffleRng));
+  });
+
+  test("Snecko Eye still confuses the whole opening hand", () => {
+    for (let i = 0; i < 5; i++) {
+      const s = game({ seed: `SNK${i}`, deck: strikes(12), relics: ["SNECKO_EYE"] });
+      expect(power(s, "CONFUSED")).toBeDefined();
+      expect(s.combat!.player.piles.hand.length).toBe(7);
+    }
+  });
+
+  test("Confusion clears freeToPlayOnce on every drawn card it rolls (ConfusionPower.onCardDraw)", () => {
+    const s = game({ deck: strikes(14), relics: ["SNECKO_EYE"] });
+    for (const iid of s.combat!.player.piles.draw) s.combat!.cards[iid]!.freeToPlayOnce = true;
+    const t = advance(s, { cmd: "endTurn" }, B);
+    const hand = t.combat!.player.piles.hand.map((iid) => t.combat!.cards[iid]!);
+    expect(hand.length).toBe(7);
+    expect(hand.every((c) => !c.freeToPlayOnce)).toBe(true);
+  });
+});
+
+describe("java fidelity: triggers and ordering", () => {
+  test("Meat on the Bone checks HP before Burning Blood heals (AbstractRoom.endBattle)", () => {
+    const s = game({ deck: jabs(7), relics: ["BURNING_BLOOD", "MEAT_ON_THE_BONE"], hp: 38 });
+    s.combat!.monsters[0]!.hp = 1;
+    const t = play(s, "T_JAB", 0);
+    expect(t.combat!.monsters[0]!.isDead).toBe(true);
+    expect(t.run.hp).toBe(38 + 12 + 6);
+  });
+
+  test("Centennial Puzzle draws on top of the queue: before the hit's follow-up", () => {
+    let s = game({ deck: strikes(12), relics: ["CENTENNIAL_PUZZLE"], monsters: ["T_WOUNDER"], hp: 60 });
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(handNames(s).length).toBe(9);
+    expect(handNames(s).slice(0, 4)).toEqual(["T_STRIKE", "T_STRIKE", "T_STRIKE", "WOUND"]);
+  });
+
+  test("Runic Cube draws on top of the queue: before the hit's follow-up", () => {
+    let s = game({ deck: strikes(12), relics: ["RUNIC_CUBE"], monsters: ["T_WOUNDER"], hp: 60 });
+    s = advance(s, { cmd: "endTurn" }, B);
+    expect(handNames(s).slice(0, 2)).toEqual(["T_STRIKE", "WOUND"]);
+  });
+
+  test("Magic Flower rounds (MathUtils.round): Toy Ornithopter's 5 heals 8 in combat", () => {
+    const s = game({ deck: strikes(5), relics: ["TOY_ORNITHOPTER", "MAGIC_FLOWER"], hp: 40 });
+    s.run.potions[0] = "BLOCK_POTION";
+    const t = advance(s, { cmd: "usePotion", slot: 0 }, B);
+    expect(t.run.hp).toBe(48);
+  });
+
+  test("Face of Cleric's +1 Max HP heals through the heal path (Magic Flower: +2)", () => {
+    const s = game({ deck: jabs(7), relics: ["FACE_OF_CLERIC", "MAGIC_FLOWER"], hp: 40 });
+    s.combat!.monsters[0]!.hp = 1;
+    const t = play(s, "T_JAB", 0);
+    expect(t.run.maxHp).toBe(81);
+    expect(t.run.hp).toBe(42);
+  });
+
+  test("Strawberry / Pear / Mango heal through the heal path (Mark of the Bloom blocks it)", () => {
+    for (const [id, n] of [["STRAWBERRY", 7], ["PEAR", 10], ["MANGO", 14]] as const) {
+      const bloom = game({ deck: strikes(5), relics: ["MARK_OF_THE_BLOOM"], hp: 50 });
+      B.relics.get(id)!.onEquip!(makeCtx(bloom));
+      expect(bloom.run.maxHp).toBe(80 + n);
+      expect(bloom.run.hp).toBe(50);
+      const plain = game({ deck: strikes(5), relics: [], hp: 50 });
+      B.relics.get(id)!.onEquip!(makeCtx(plain));
+      expect(plain.run.hp).toBe(50 + n);
+    }
+  });
+
+  test("Gremlin Horn fires on a half-death (Darkling / Awakened One corpse)", () => {
+    const s = game({ deck: jabs(12), relics: ["GREMLIN_HORN"], monsters: ["T_PHOENIX", "T_DUMMY"] });
+    s.combat!.monsters[0]!.hp = 1;
+    const energy0 = s.combat!.player.energy;
+    const t = play(s, "T_JAB", 0);
+    expect(t.combat!.monsters[0]!.halfDead).toBe(true);
+    expect(t.combat!.player.energy).toBe(energy0 + 1);
+    expect(t.combat!.player.piles.hand.length).toBe(5); // -1 played, +1 drawn
+  });
+
+  test("Dead Branch never makes a HEALING card", () => {
+    const s = game({ deck: strikes(5), relics: ["DEAD_BRANCH"] });
+    const ctx = makeCtx(s);
+    const def = B.relics.get("DEAD_BRANCH")!;
+    const hctx = { ...ctx, owner: PLAYER, relicCounter: { get: () => 0, set: () => {} } };
+    const card = s.combat!.cards[s.combat!.player.piles.hand[0]!]!;
+    for (let i = 0; i < 60; i++) def.hooks.onExhaust!(hctx, card);
+    const made = ctx.queue.snapshot().map((a) => (a.kind === "makeTempCard" ? a.defId : ""));
+    expect(made.length).toBe(60);
+    expect(made).not.toContain("T_HEAL_POWER");
+    for (const id of made) {
+      const d = B.cards.get(id)!;
+      expect(d.color).toBe("red");
+      expect(["common", "uncommon", "rare"]).toContain(d.rarity);
+    }
+  });
+
+  test("Omamori negates before Ceramic Fish / Darkstone Periapt see the curse", () => {
+    const s = game({ deck: strikes(5), relics: ["CERAMIC_FISH", "DARKSTONE_PERIAPT", "OMAMORI"], hp: 50 });
+    setRelicCounter(s, "OMAMORI", 1);
+    const ctx = makeCtx(s);
+    expect(obtainDeckCard(ctx, "T_CURSE")).toBe(false);
+    expect(s.run.gold).toBe(99);
+    expect(s.run.maxHp).toBe(80);
+    expect(relicCounter(s, "OMAMORI")).toBe(0);
+    // charges spent: the next curse lands and both relics react
+    expect(obtainDeckCard(ctx, "T_CURSE")).toBe(true);
+    expect(s.run.gold).toBe(99 + 9);
+    expect(s.run.maxHp).toBe(86);
+    expect(s.run.hp).toBe(56);
+  });
+
+  test("Bloody Idol heals on a real gold gain only; never with Ectoplasm, in either relic order", () => {
+    const idol = B.relics.get("BLOODY_IDOL")!;
+    for (const relics of [["BLOODY_IDOL"], ["BLOODY_IDOL", "ECTOPLASM"], ["ECTOPLASM", "BLOODY_IDOL"]]) {
+      const s = game({ deck: strikes(5), relics, hp: 50 });
+      const ctx = makeCtx(s);
+      const hctx = { ...ctx, owner: PLAYER, relicCounter: { get: () => 0, set: () => {} } };
+      expect(idol.hooks.onGainGold!(hctx, 25)).toBe(25);
+      expect(s.run.hp).toBe(relics.includes("ECTOPLASM") ? 50 : 55);
+      idol.hooks.onGainGold!(hctx, 0);
+      expect(s.run.hp).toBe(relics.includes("ECTOPLASM") ? 50 : 55);
+    }
+  });
+
+  test("Strange Spoon: a card that would exhaust is discarded on a cardRandomRng coin flip", () => {
+    const outcomes = new Set<string>();
+    for (let i = 0; i < 16; i++) {
+      let s = game({ seed: `SPOON${i}`, deck: [{ defId: "T_EXHAUST_DRAW" }, ...strikes(4)], relics: ["STRANGE_SPOON"] });
+      s = play(s, "T_EXHAUST_DRAW");
+      const piles = s.combat!.player.piles;
+      const where = (ids: number[]) => ids.some((iid) => s.combat!.cards[iid]!.defId === "T_EXHAUST_DRAW");
+      outcomes.add(where(piles.exhaust) ? "exhaust" : where(piles.discard) ? "discard" : "?");
+    }
+    expect(outcomes).toEqual(new Set(["exhaust", "discard"]));
+    // without the Spoon it always exhausts
+    let t = game({ deck: [{ defId: "T_EXHAUST_DRAW" }, ...strikes(4)], relics: [] });
+    t = play(t, "T_EXHAUST_DRAW");
+    expect(t.combat!.player.piles.exhaust.length).toBe(1);
+  });
+
+  test("Blue Candle: a curse becomes playable, costs 1 HP and exhausts (AbstractCard.canUse, BlueCandle.onUseCard)", () => {
+    const deck = [{ defId: "INJURY" }, ...strikes(4)];
+    const s = game({ deck, relics: ["BLUE_CANDLE"], hp: 50 });
+    const injury = s.combat!.cards[s.combat!.player.piles.hand[handNames(s).indexOf("INJURY")]!]!;
+    expect(getCardPlayability(s, B, injury).playable).toBe(true);
+    const energy0 = s.combat!.player.energy;
+    const t = play(s, "INJURY");
+    expect(t.run.hp).toBe(49);
+    expect(t.combat!.player.energy).toBe(energy0);
+    expect(t.combat!.player.piles.exhaust.map((iid) => t.combat!.cards[iid]!.defId)).toEqual(["INJURY"]);
+    // without the Candle the curse stays unplayable
+    const u = game({ deck, relics: [], hp: 50 });
+    const inj = u.combat!.cards[u.combat!.player.piles.hand[handNames(u).indexOf("INJURY")]!]!;
+    expect(getCardPlayability(u, B, inj).playable).toBe(false);
+    expect(() => play(u, "INJURY")).toThrow("unplayable card");
+  });
+
+  test("Medical Kit: a status becomes playable and exhausts, no HP cost; neither relic covers the other type", () => {
+    const deck = [{ defId: "WOUND" }, { defId: "INJURY" }, ...strikes(3)];
+    const s = game({ deck, relics: ["MEDICAL_KIT"], hp: 50 });
+    const cardOf = (st: GameState, name: string) => st.combat!.cards[st.combat!.player.piles.hand[handNames(st).indexOf(name)]!]!;
+    expect(getCardPlayability(s, B, cardOf(s, "WOUND")).playable).toBe(true);
+    expect(getCardPlayability(s, B, cardOf(s, "INJURY")).playable).toBe(false);
+    const t = play(s, "WOUND");
+    expect(t.run.hp).toBe(50);
+    expect(t.combat!.player.piles.exhaust.map((iid) => t.combat!.cards[iid]!.defId)).toEqual(["WOUND"]);
+    const candle = game({ deck, relics: ["BLUE_CANDLE"], hp: 50 });
+    expect(getCardPlayability(candle, B, cardOf(candle, "WOUND")).playable).toBe(false);
+  });
+
+  test("Necronomicon: its curse goes through the obtain path; X Attacks paid with 2+ replay", () => {
+    const charged = game({ deck: strikes(5), relics: ["OMAMORI"] });
+    setRelicCounter(charged, "OMAMORI", 2);
+    B.relics.get("NECRONOMICON")!.onEquip!(makeCtx(charged));
+    expect(charged.run.deck.some((c) => c.defId === "NECRONOMICURSE")).toBe(false);
+    expect(relicCounter(charged, "OMAMORI")).toBe(1);
+
+    const s = game({ deck: [{ defId: "T_X_ATTACK" }, ...strikes(4)], relics: ["NECRONOMICON"] });
+    const hp0 = monsterHp(s);
+    const t = play(s, "T_X_ATTACK", 0);
+    expect(monsterHp(t)).toBe(hp0 - 8); // played twice
   });
 });

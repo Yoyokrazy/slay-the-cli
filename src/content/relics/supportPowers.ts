@@ -136,7 +136,8 @@ export const relicSupportPowers: PowerDef[] = [
   },
   {
     // "Whenever you draw a card, randomize its cost." (Snecko Eye)
-    // Exact port: roll always consumed; cost only rewritten when it changes.
+    // ConfusionPower.onCardDraw: roll always consumed for cost >= 0 cards; the
+    // cost only rewritten when it changes; freeToPlayOnce cleared either way.
     id: "CONFUSED",
     name: "Confused",
     kind: "debuff",
@@ -150,6 +151,7 @@ export const relicSupportPowers: PowerDef[] = [
             card.cost = newCost;
             card.costForTurn = newCost;
           }
+          card.freeToPlayOnce = false;
         }
       },
     },

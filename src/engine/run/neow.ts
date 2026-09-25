@@ -231,13 +231,15 @@ export function applyNeowBonus(ctx: EffectCtx, bonus: NeowBonus): NeowFollowUp {
       return null;
     }
     case "RANDOM_COMMON_RELIC":
-      equipRelic(ctx, obtainRelicFromPool(run, "common"));
+      equipRelic(ctx, obtainRelicFromPool(ctx, "common"));
       return null;
     case "ONE_RARE_RELIC":
-      equipRelic(ctx, obtainRelicFromPool(run, "rare"));
+      equipRelic(ctx, obtainRelicFromPool(ctx, "rare"));
       return null;
     case "BOSS_RELIC":
-      equipRelic(ctx, obtainRelicFromPool(run, "boss"));
+      // the starter relic is already gone (drawback first), so a Black Blood
+      // off the front fails canSpawn and the next boss relic is taken
+      equipRelic(ctx, obtainRelicFromPool(ctx, "boss"));
       return null;
     case "TEN_PERCENT_HP_BONUS": {
       const hpBonus = Math.floor(f32mul(run.maxHp, NEOW_BONUS_VALUES.TEN_PERCENT_HP_BONUS));

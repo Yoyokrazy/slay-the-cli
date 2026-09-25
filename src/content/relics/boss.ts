@@ -1,19 +1,17 @@
 // Boss relics - values audited vs data/corpus/relics.json.
 //
-// ENGINE-GAP(energy): "Gain 1 Energy at the start of your turn" on boss relics
-// means +1 energyPerTurn. PlayerCombatState.energyPerTurn is set from the
-// character at combat build and there is no hook to modify it - the engine
-// owner wires energyPerTurn from relics (per workstream agreement). Affected:
-// ECTOPLASM, SOZU, CURSED_KEY, BUSTED_CROWN, COFFEE_DRIPPER, FUSION_HAMMER,
-// RUNIC_DOME, VELVET_CHOKER, PHILOSOPHERS_STONE, MARK_OF_PAIN and the
-// conditional SLAVERS_COLLAR. Their non-energy sides are implemented below
-// where expressible.
+// Energy: "Gain 1 Energy at the start of your turn" is the game's
+// energyMaster++ in onEquip, i.e. +1 energyPerTurn. Declared with
+// energyBonus (Slaver's Collar: energyBonusEliteBossOnly) and applied by
+// buildCombatState. Affected: ECTOPLASM, SOZU, CURSED_KEY, BUSTED_CROWN,
+// COFFEE_DRIPPER, FUSION_HAMMER, RUNIC_DOME, VELVET_CHOKER, PHILOSOPHERS_STONE,
+// MARK_OF_PAIN and SLAVERS_COLLAR (the ENGINE-GAP(energy) notes below predate it).
 
 import type { RelicDef } from "../../engine/content/defs";
 import { f32add } from "../../engine/core/math";
 import { PLAYER, monster } from "../../engine/core/ids";
 import { obtainDeckCard } from "../../engine/run/deck";
-import { cnt, healPlayer } from "./lib";
+import { cnt, healPlayer, ownsRelic } from "./lib";
 import { astrolabePickup, callingBellPickup, emptyCagePickup, pandorasBoxPickup, tinyHousePickup } from "./pickup";
 import { randomCurse, removeRelic } from "../events/lib";
 import { channelOrb } from "../../engine/combat/orbRuntime";
@@ -25,6 +23,7 @@ export const bossRelics: RelicDef[] = [
     name: "Black Blood",
     tier: "boss",
     pool: "red",
+    canSpawn: ownsRelic("BURNING_BLOOD"),
     onEquip: (ctx) => removeRelic(ctx, "BURNING_BLOOD"),
     hooks: { onVictory: (ctx) => healPlayer(ctx, 12) },
   },
@@ -78,6 +77,8 @@ export const bossRelics: RelicDef[] = [
     name: "Ectoplasm",
     tier: "boss",
     pool: "shared",
+    // Ectoplasm.canSpawn: AbstractDungeon.actNum <= 1 (only the act 1 boss chest)
+    canSpawn: (ctx) => ctx.run.act <= 1,
     hooks: { onGainGold: () => 0 },
   },
   {
@@ -87,6 +88,7 @@ export const bossRelics: RelicDef[] = [
     name: "Frozen Core",
     tier: "boss",
     pool: "blue",
+    canSpawn: ownsRelic("CRACKED_CORE"),
     onEquip: (ctx) => removeRelic(ctx, "CRACKED_CORE"),
     hooks: {
       // Channelled SYNCHRONOUSLY, matching the reference's relic phase in
@@ -111,14 +113,15 @@ export const bossRelics: RelicDef[] = [
   },
   {
     // "Replaces Pure Water. At the start of each combat, add 3 Miracles into your hand."
-    // DEPENDS: MIRACLE card def.
+    // HolyWater.atBattleStartPreDraw. DEPENDS: MIRACLE card def.
     id: "HOLY_WATER",
     name: "Holy Water",
     tier: "boss",
     pool: "purple",
+    canSpawn: ownsRelic("PURE_WATER"),
     onEquip: (ctx) => removeRelic(ctx, "PURE_WATER"),
     hooks: {
-      atBattleStart: (ctx) => {
+      atBattleStartPreDraw: (ctx) => {
         if (ctx.bundle.cards.has("MIRACLE")) {
           ctx.queue.addToBottom({ kind: "makeTempCard", defId: "MIRACLE", upgrades: 0, dest: "hand", n: 3 });
         }
@@ -161,14 +164,15 @@ export const bossRelics: RelicDef[] = [
   },
   {
     // "Gain 1 Energy... At the start of combat, shuffle 2 Wounds into your draw pile."
-    // ENGINE-GAP(energy); DEPENDS: WOUND card def.
+    // MarkOfPain.atBattleStart addToBot: the Wounds land after the opening draw.
+    // DEPENDS: WOUND card def.
     id: "MARK_OF_PAIN",
     energyBonus: 1,
     name: "Mark of Pain",
     tier: "boss",
     pool: "red",
     hooks: {
-      atBattleStartPreDraw: (ctx) => {
+      atBattleStart: (ctx) => {
         if (ctx.bundle.cards.has("WOUND")) {
           ctx.queue.addToBottom({ kind: "makeTempCard", defId: "WOUND", upgrades: 0, dest: "draw", n: 2 });
         }
@@ -176,12 +180,13 @@ export const bossRelics: RelicDef[] = [
     },
   },
   {
-    // "At the start of each combat, Channel 1 Plasma." DEPENDS: PLASMA orb def.
+    // "At the start of each combat, Channel 1 Plasma." NuclearBattery.atPreBattle,
+    // so the Plasma is in place for the turn-1 orb start. DEPENDS: PLASMA orb def.
     id: "NUCLEAR_BATTERY",
     name: "Nuclear Battery",
     tier: "boss",
     pool: "blue",
-    hooks: { atBattleStart: (ctx) => ctx.queue.addToBottom({ kind: "channelOrb", orbId: "PLASMA" }) },
+    hooks: { atBattleStartPreDraw: (ctx) => ctx.queue.addToBottom({ kind: "channelOrb", orbId: "PLASMA" }) },
   },
   {
     // "Gain 1 Energy... ALL enemies start combat with 1 Strength."
@@ -213,6 +218,7 @@ export const bossRelics: RelicDef[] = [
     name: "Ring of the Serpent",
     tier: "boss",
     pool: "green",
+    canSpawn: ownsRelic("RING_OF_THE_SNAKE"),
     onEquip: (ctx) => removeRelic(ctx, "RING_OF_THE_SNAKE"),
     hooks: { modifyDrawPerTurn: (_ctx, n) => n + 1 },
   },
@@ -227,14 +233,14 @@ export const bossRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Whenever you lose HP, draw 1 card."
+    // "Whenever you lose HP, draw 1 card." RunicCube.wasHPLost addToTop.
     id: "RUNIC_CUBE",
     name: "Runic Cube",
     tier: "boss",
     pool: "red",
     hooks: {
       wasHPLost: (ctx, _info, amount) => {
-        if (amount > 0) ctx.queue.addToBottom({ kind: "draw", n: 1 });
+        if (amount > 0) ctx.queue.addToTop({ kind: "draw", n: 1 });
       },
     },
   },
@@ -268,13 +274,14 @@ export const bossRelics: RelicDef[] = [
   },
   {
     // "At the start of your turn, draw 2 additional cards. Start each combat Confused."
+    // SneckoEye.atPreBattle applies Confusion before the opening draw.
     id: "SNECKO_EYE",
     name: "Snecko Eye",
     tier: "boss",
     pool: "shared",
     hooks: {
       modifyDrawPerTurn: (_ctx, n) => n + 2,
-      atBattleStart: (ctx) =>
+      atBattleStartPreDraw: (ctx) =>
         ctx.queue.addToBottom({ kind: "applyPower", source: PLAYER, target: PLAYER, powerId: "CONFUSED", amount: 1 }),
     },
   },
@@ -339,7 +346,8 @@ export const bossRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Elites now drop an additional relic when defeated." RUN-LAYER (rewards).
+    // "Elites now drop an additional relic when defeated." MonsterRoomElite
+    // adds a non-campfire relic off a second elite tier roll (run/rewards.ts).
     id: "BLACK_STAR",
     name: "Black Star",
     tier: "boss",

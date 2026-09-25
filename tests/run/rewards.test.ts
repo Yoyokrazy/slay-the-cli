@@ -405,39 +405,39 @@ describe("chests", () => {
 
 describe("relic pools", () => {
   test("consumed from the front, with exhaustion fallback to CIRCLET", () => {
-    const { s } = ctxFor("POOL");
+    const { s, ctx } = ctxFor("POOL");
     const first = s.run.pools.commonRelics[0]!;
-    expect(obtainRelicFromPool(s.run, "common")).toBe(first);
+    expect(obtainRelicFromPool(ctx, "common")).toBe(first);
     s.run.pools.commonRelics = [];
     s.run.pools.uncommonRelics = ["U1"];
-    expect(obtainRelicFromPool(s.run, "common")).toBe("U1"); // common -> uncommon
+    expect(obtainRelicFromPool(ctx, "common")).toBe("U1"); // common -> uncommon
     s.run.pools.uncommonRelics = [];
     s.run.pools.rareRelics = [];
-    expect(obtainRelicFromPool(s.run, "common")).toBe("CIRCLET");
+    expect(obtainRelicFromPool(ctx, "common")).toBe("CIRCLET");
     s.run.pools.bossRelics = [];
-    expect(obtainRelicFromPool(s.run, "boss")).toBe("RED_CIRCLET");
+    expect(obtainRelicFromPool(ctx, "boss")).toBe("RED_CIRCLET");
   });
 
   // the chest screen names the relic before you trade it for the key
   test("peek returns what the take would hand over, and consumes nothing", () => {
-    const { s } = ctxFor("PEEK");
+    const { s, ctx } = ctxFor("PEEK");
     const sizes = () => s.run.pools.commonRelics.length + s.run.pools.uncommonRelics.length;
     for (const tier of ["common", "uncommon", "rare", "shop", "boss"] as const) {
       const before = sizes();
-      const peeked = peekRelicFromPool(s.run, tier);
-      expect(peekRelicFromPool(s.run, tier)).toBe(peeked); // idempotent
+      const peeked = peekRelicFromPool(ctx, tier);
+      expect(peekRelicFromPool(ctx, tier)).toBe(peeked); // idempotent
       expect(sizes()).toBe(before);
-      expect(obtainRelicFromPool(s.run, tier)).toBe(peeked);
+      expect(obtainRelicFromPool(ctx, tier)).toBe(peeked);
     }
     // the fallback chain matches too
     s.run.pools.commonRelics = [];
     s.run.pools.uncommonRelics = ["U1"];
-    expect(peekRelicFromPool(s.run, "common")).toBe("U1");
+    expect(peekRelicFromPool(ctx, "common")).toBe("U1");
     s.run.pools.uncommonRelics = [];
     s.run.pools.rareRelics = [];
-    expect(peekRelicFromPool(s.run, "common")).toBe("CIRCLET");
+    expect(peekRelicFromPool(ctx, "common")).toBe("CIRCLET");
     s.run.pools.bossRelics = [];
-    expect(peekRelicFromPool(s.run, "boss")).toBe("RED_CIRCLET");
+    expect(peekRelicFromPool(ctx, "boss")).toBe("RED_CIRCLET");
   });
 });
 

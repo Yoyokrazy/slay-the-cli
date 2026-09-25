@@ -100,7 +100,7 @@ export function buildCombatState(
   };
 }
 
-/** Roll HP, fire pre-battle hooks, place innate cards, roll first moves, start turn 1. */
+/** Roll HP, fire pre-draw hooks, place innate cards, roll first moves, queue turn 1. */
 export function initializeCombat(ctx: EffectCtx): void {
   const combat = ctx.combat!;
   ctx.emit("combatStarted", { encounterId: combat.combatFlags.encounterId, monsters: combat.monsters.map((m) => m.id) });
@@ -145,7 +145,9 @@ export function initializeCombat(ctx: EffectCtx): void {
     if (!m.isDead && !m.isEscaped) rollMove(ctx, m);
   }
 
-  fireHook(ctx, PLAYER, "atBattleStart");
-
+  // atBattleStart fires from the first startPlayerTurn, not here: the game
+  // queues the opening DrawCardAction before applyStartOfCombatLogic
+  // (AbstractRoom.update), so its relics act after the draw, after the
+  // monsters' pre-battle setup and after the burning-elite buff.
   ctx.queue.addToBottom({ kind: "startPlayerTurn" });
 }

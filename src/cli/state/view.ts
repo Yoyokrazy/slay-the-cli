@@ -5,6 +5,7 @@
 
 import type { GameState, Command } from "../../engine/game";
 import type { RoomState, RewardEntry, ShopState } from "../../engine/run/runState";
+import { tokeableIndices } from "../../engine/run/rest";
 import type { CardInstance, CombatState } from "../../engine/combat/combatState";
 import { potionUseBlockedReason, type CardDef, type ContentBundle } from "../../engine/content/defs";
 import { needsEnemyTarget } from "../../engine/content/targeting";
@@ -1250,11 +1251,13 @@ function buildRest(g: GameState, room: Extract<RoomState, { kind: "rest" }>, pag
       });
     }
     if (has("PEACE_PIPE")) {
+      // bottled cards and the unremovable curses are never offered
+      const tokeable = tokeableIndices(g.run.deck).length > 0;
       items.push({
         label: "Toke",
         sub: "Remove a card",
-        enabled: g.run.deck.length > 0,
-        note: g.run.deck.length === 0 ? "deck is empty" : null,
+        enabled: tokeable,
+        note: g.run.deck.length === 0 ? "deck is empty" : tokeable ? null : "nothing to remove",
         action: cmd({ cmd: "restOption", kind: "toke" }),
       });
     }

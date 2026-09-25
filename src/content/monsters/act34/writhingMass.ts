@@ -3,11 +3,12 @@
 // Java: usePreBattleAction applies new MalleablePower(this); its default
 // constructor stores basePower = amount = 3, and reset restores that base.
 // Implant grants the PARASITE curse to the MASTER deck once used (even if
-// the Mass is later killed); Omamori's counter is consumed instead, and
-// Darkstone Periapt's +6 max HP fires at implant time when Omamori is absent.
+// the Mass is later killed) through AddCardToDeckAction, i.e. the shared
+// card-obtain path (Omamori negation, Darkstone Periapt, Ceramic Fish).
 
 import type { MonsterDef } from "../../../engine/content/defs";
-import { firstTurn, hasRelic, lastMove } from "../../util";
+import { obtainDeckCard } from "../../../engine/run/deck";
+import { firstTurn, lastMove } from "../../util";
 import { attackPlayer, playerPower, prePower, selfBlock } from "../act1/_shared";
 
 const STRONG_STRIKE = "WRITHING_MASS_STRONG_STRIKE";
@@ -59,18 +60,11 @@ export const writhingMass: MonsterDef = {
       intent: "strongDebuff",
       execute: (ctx, self) => {
         self.data.usedImplant = true;
-        const omamori = ctx.run.relics.find((r) => r.defId === "OMAMORI");
-        if (!omamori && hasRelic(ctx, "DARKSTONE_PERIAPT")) {
-          ctx.run.maxHp += 6;
-          ctx.run.hp += 6;
-        }
-        // the curse lands in the MASTER deck when the battle ends; granting
-        // it here is unobservable in-combat (Omamori consumed instead)
-        if (omamori && omamori.counter > 0) {
-          omamori.counter--;
-        } else {
-          ctx.run.deck.push({ defId: "PARASITE", upgrades: 0, misc: 0, bottled: false });
-        }
+        // AddCardToDeckAction(new Parasite()) -> ShowCardAndObtainEffect: the
+        // shared obtain path, so Omamori negates it (while charged) and
+        // Darkstone Periapt / Ceramic Fish react to it. The curse joins the
+        // master deck, not this fight's piles.
+        obtainDeckCard(ctx, "PARASITE");
       },
     },
   },

@@ -113,6 +113,15 @@ describe("pure helpers", () => {
     expect(validateSavedRun(demoish)).toBeNull();
   });
 
+  test("loading an old save moves history.tinyChestCounter onto the Tiny Chest relic", () => {
+    const s = createRun({ seed: "SAVETINY", bundle, character: "IRONCLAD" });
+    s.run.relics.push({ defId: "TINY_CHEST", counter: 0 });
+    (s.run.history as Record<string, unknown>).tinyChestCounter = 2;
+    const loaded = validateSavedRun(JSON.parse(JSON.stringify(s)))!;
+    expect("tinyChestCounter" in loaded.run.history).toBe(false);
+    expect(loaded.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(2);
+  });
+
   test("rest heal preview: 30% of max, capped by missing HP", () => {
     const s = createRun({ seed: "RESTCHK", bundle, character: "IRONCLAD" });
     // fresh Ironclad at full HP heals 0

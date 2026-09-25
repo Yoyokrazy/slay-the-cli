@@ -1,17 +1,21 @@
 // Rare relics - values audited vs data/corpus/relics.json.
 
 import type { RelicDef } from "../../engine/content/defs";
-import { f32mul } from "../../engine/core/math";
+import { f32mul, mathUtilsRound } from "../../engine/core/math";
 import { PLAYER, monster } from "../../engine/core/ids";
 import {
   aliveMonsterIdxs,
-  classPoolFilter,
+  campfireRelicCanSpawn,
   cnt,
   ensureContentEffects,
   gainGold,
-  randomCardDefs,
+  inCombatClassPoolFilter,
+  increaseMaxHp,
+  randomCardDefInCombat,
   relicDamage,
   relicDamageAll,
+  spawnsOutsideShops,
+  spawnsUpToFloor,
 } from "./lib";
 
 export const rareRelics: RelicDef[] = [
@@ -52,9 +56,9 @@ export const rareRelics: RelicDef[] = [
     },
   },
   {
-    // "Whenever you apply Vulnerable, also apply 1 Weak."
-    // ENGINE-GAP: the engine does not fire onApplyPower at the applyPower site
-    // yet; hook side is ready and exact once it does.
+    // "Whenever you apply Vulnerable, also apply 1 Weak." ApplyPowerAction
+    // triggers it for a player-applied Vulnerable on a target without Artifact;
+    // the engine's source-side onApplyPower fires only when the power lands.
     id: "CHAMPION_BELT",
     name: "Champion Belt",
     tier: "rare",
@@ -98,15 +102,16 @@ export const rareRelics: RelicDef[] = [
   },
   {
     // "Whenever you Exhaust a card, add a random card to your hand."
-    // Adjudication (matches returnTrulyRandomCardInCombat): random card from the
-    // character's common/uncommon/rare pool, cardRandomRng. DEPENDS: pool size.
+    // returnTrulyRandomCardInCombat: the class pool minus HEALING cards (Feed,
+    // Reaper), picked when the card exhausts; nothing once the fight is won.
     id: "DEAD_BRANCH",
     name: "Dead Branch",
     tier: "rare",
     pool: "shared",
     hooks: {
       onExhaust: (ctx) => {
-        const picked = randomCardDefs(ctx, 1, classPoolFilter(ctx))[0];
+        if (ctx.rt.combatOver) return;
+        const picked = randomCardDefInCombat(ctx, inCombatClassPoolFilter(ctx));
         if (picked) ctx.queue.addToBottom({ kind: "makeTempCard", defId: picked.id, upgrades: 0, dest: "hand", n: 1 });
       },
     },
@@ -180,8 +185,8 @@ export const rareRelics: RelicDef[] = [
     },
   },
   {
-    // "You can no longer become Weakened."
-    // ENGINE-GAP: exact once the engine fires onApplyPower (veto) at applyPower.
+    // "You can no longer become Weakened." Target-side onApplyPower veto,
+    // ahead of Artifact (ApplyPowerAction checks Ginger first).
     id: "GINGER",
     name: "Ginger",
     tier: "rare",
@@ -237,23 +242,20 @@ export const rareRelics: RelicDef[] = [
     hooks: {},
   },
   {
-    // "Healing is 50% more effective during combat."
+    // "Healing is 50% more effective during combat." MathUtils.round(heal * 1.5f).
     id: "MAGIC_FLOWER",
     name: "Magic Flower",
     tier: "rare",
     pool: "red",
-    hooks: { onHeal: (ctx, amount) => (ctx.combat ? f32mul(amount, 1.5) : amount) },
+    hooks: { onHeal: (ctx, amount) => (ctx.combat ? mathUtilsRound(f32mul(amount, 1.5)) : amount) },
   },
   {
-    // "Upon pickup, raise your Max HP by 14."
+    // "Upon pickup, raise your Max HP by 14." increaseMaxHp(14, true).
     id: "MANGO",
     name: "Mango",
     tier: "rare",
     pool: "shared",
-    onEquip: (ctx) => {
-      ctx.run.maxHp += 14;
-      ctx.run.hp += 14;
-    },
+    onEquip: (ctx) => increaseMaxHp(ctx, 14),
     hooks: {},
   },
   {
@@ -262,6 +264,7 @@ export const rareRelics: RelicDef[] = [
     name: "Old Coin",
     tier: "rare",
     pool: "shared",
+    canSpawn: spawnsOutsideShops,
     onEquip: (ctx) => gainGold(ctx, 300),
     hooks: {},
   },
@@ -271,22 +274,28 @@ export const rareRelics: RelicDef[] = [
     name: "Peace Pipe",
     tier: "rare",
     pool: "shared",
+    canSpawn: campfireRelicCanSpawn,
     hooks: {},
   },
   {
     // "Whenever you play 3 or less cards during your turn, draw 3 additional
-    // cards at the start of your next turn."
+    // cards at the start of your next turn." Pocketwatch.atTurnStartPostDraw
+    // queues its own DrawCardAction(3) behind the turn's draw; counter counts
+    // cards played since the last post-draw check (-1 = the first turn).
     id: "POCKETWATCH",
     name: "Pocketwatch",
     tier: "rare",
     pool: "shared",
     hooks: {
-      atBattleStart: (ctx) => cnt(ctx).set(0),
-      atEndOfTurn: (ctx, isPlayerTurn) => {
-        if (isPlayerTurn) cnt(ctx).set(ctx.combat!.turnFlags.cardsPlayedThisTurn <= 3 ? 1 : 0);
+      atBattleStart: (ctx) => cnt(ctx).set(-1),
+      onUseCard: (ctx) => {
+        if (cnt(ctx).get() >= 0) cnt(ctx).set(cnt(ctx).get() + 1);
       },
-      modifyDrawPerTurn: (ctx, n) => (cnt(ctx).get() === 1 ? n + 3 : n),
-      atStartOfTurnPostDraw: (ctx) => cnt(ctx).set(0),
+      atStartOfTurnPostDraw: (ctx) => {
+        const played = cnt(ctx).get();
+        if (played >= 0 && played <= 3) ctx.queue.addToBottom({ kind: "draw", n: 3 });
+        cnt(ctx).set(0);
+      },
     },
   },
   {
@@ -295,6 +304,7 @@ export const rareRelics: RelicDef[] = [
     name: "Prayer Wheel",
     tier: "rare",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(48),
     hooks: {},
   },
   {
@@ -303,6 +313,7 @@ export const rareRelics: RelicDef[] = [
     name: "Shovel",
     tier: "rare",
     pool: "shared",
+    canSpawn: campfireRelicCanSpawn,
     hooks: {},
   },
   {
@@ -399,8 +410,8 @@ export const rareRelics: RelicDef[] = [
     hooks: { onLoseHp: (_ctx, amount) => (amount > 0 ? amount - 1 : amount) },
   },
   {
-    // "You can no longer become Frail."
-    // ENGINE-GAP: exact once the engine fires onApplyPower (veto) at applyPower.
+    // "You can no longer become Frail." Target-side onApplyPower veto,
+    // ahead of Artifact (ApplyPowerAction checks Turnip first).
     id: "TURNIP",
     name: "Turnip",
     tier: "rare",
@@ -430,6 +441,7 @@ export const rareRelics: RelicDef[] = [
     name: "Girya",
     tier: "rare",
     pool: "shared",
+    canSpawn: campfireRelicCanSpawn,
     hooks: {
       atBattleStart: (ctx) => {
         const n = cnt(ctx).get();
@@ -447,6 +459,7 @@ export const rareRelics: RelicDef[] = [
     countsDown: true,
     tier: "rare",
     pool: "shared",
+    canSpawn: spawnsUpToFloor(40),
     onEquip: (ctx) => {
       const r = ctx.run.relics.find((x) => x.defId === "WING_BOOTS");
       if (r) r.counter = 3;

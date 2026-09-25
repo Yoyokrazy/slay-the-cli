@@ -16,14 +16,13 @@ import type { RewardEntry } from "../../engine/run/runState";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
 import { removeDeckCard } from "../../engine/run/deck";
 import { canSmith } from "../../engine/run/rest";
-import { classCardPool, createCardReward, nextRewardGroup, potionPool } from "../../engine/run/rewards";
+import { classCardPool, createCardReward, nextRewardGroup, potionPool, withGoldenIdolBonus } from "../../engine/run/rewards";
 import {
   UNREMOVABLE_CURSES,
   deckIndicesOfType,
   gainMaxHp,
   obtainCard,
   removeDeckCards,
-  removableIndices,
   screenlessRelicOfTier,
 } from "../events/lib";
 
@@ -52,8 +51,9 @@ function pickupRewards(ctx: EffectCtx): RewardEntry[] {
 
 // --- deck helpers ---------------------------------------------------------------------
 
-/** Astrolabe's screen (TRANSFORM_UPGRADE): everything that canTransform(),
- *  bottled cards included - unlike a REMOVE screen, which drops them. */
+/** masterDeck.getPurgeableCards(): everything but the three unremovable
+ *  curses, bottled cards included. Astrolabe and Empty Cage both grid over it
+ *  (the merchant's removal and Peace Pipe also drop bottled cards). */
 function transformableIndices(ctx: EffectCtx): number[] {
   return ctx.run.deck.map((_, i) => i).filter((i) => !UNREMOVABLE_CURSES.includes(ctx.run.deck[i]!.defId));
 }
@@ -109,6 +109,13 @@ const relicPickupChoice: EffectFn = (ctx, args) => {
   const { relicId, indices, chosen } = args as { relicId: RelicId; indices: number[]; chosen: number[] };
   const picked = (chosen ?? []).map((i) => indices[i]).filter((i): i is number => i !== undefined);
   if (picked.length === 0) return;
+  // Dolly's Mirror: a makeStatEquivalentCopy (upgrades, misc; never bottled)
+  // through ShowCardAndObtainEffect, so Omamori / eggs / Ceramic Fish apply
+  if (relicId === "DOLLYS_MIRROR") {
+    const mc = ctx.run.deck[picked[0]!];
+    if (mc) obtainCard(ctx, mc.defId, mc.upgrades, mc.misc);
+    return;
+  }
   // a bottle keeps the card: it flags the master card and takes nothing out
   // (Deck::bottleCard). The combat half lives in relics/uncommon.ts.
   if (BOTTLES.has(relicId)) {
@@ -167,11 +174,23 @@ export function callingBellPickup(ctx: EffectCtx): void {
   }
 }
 
-/** "Upon pickup, remove 2 cards from your deck." */
+/** "Upon pickup, obtain an additional copy of a card in your deck."
+ *  DollysMirror opens its grid over the whole master deck. */
+export function dollysMirrorPickup(ctx: EffectCtx): void {
+  requestPickupChoice(ctx, {
+    relicId: "DOLLYS_MIRROR",
+    indices: ctx.run.deck.map((_, i) => i),
+    count: 1,
+    reason: "relic:duplicate",
+  });
+}
+
+/** "Upon pickup, remove 2 cards from your deck." EmptyCage grids over
+ *  masterDeck.getPurgeableCards() with no bottle filter: a bottled card can go. */
 export function emptyCagePickup(ctx: EffectCtx): void {
   requestPickupChoice(ctx, {
     relicId: "EMPTY_CAGE",
-    indices: removableIndices(ctx),
+    indices: transformableIndices(ctx),
     count: 2,
     reason: "relic:remove",
   });
@@ -208,7 +227,8 @@ export function tinyHousePickup(ctx: EffectCtx): void {
   gainMaxHp(ctx, 5); // playerIncreaseMaxHp: raises the cap and heals the same
 
   const entries = pickupRewards(ctx);
-  entries.push({ kind: "gold", amount: 50, taken: false });
+  // a gold RewardItem outside a treasure room: Golden Idol's bonus applies
+  entries.push({ kind: "gold", amount: withGoldenIdolBonus(ctx.run, 50), taken: false });
   // getRandomPotion(miscRng): a uniform class-pool draw, NOT the rarity-rolled
   // potionRng reward path
   const potions = potionPool(ctx);

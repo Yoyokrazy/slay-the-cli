@@ -108,6 +108,16 @@ export function canObtainPotions(run: RunState): boolean {
 }
 
 // --- relic pools ----------------------------------------------------------------
+//
+// AbstractDungeon.returnRandomRelicKey / returnEndRandomRelicKey, exactly:
+//  - the front of the run-start shuffled tier pool (shops draw from the END);
+//  - an empty pool falls through common -> uncommon -> rare -> CIRCLET,
+//    shop -> uncommon, boss -> RED_CIRCLET (the end-draw falls back to the
+//    FRONT of the next tier, like the game);
+//  - a relic whose canSpawn() refuses right now (floor limits, Ectoplasm past
+//    act 1, Black Blood without Burning Blood, bottles without a card to
+//    bottle, shop-only refusals...) is thrown away and the draw repeats from
+//    the END of the same tier (the boss end-draw still takes the front).
 
 const TIER_POOL_KEY: Record<RelicPoolTier, keyof RunState["pools"]> = {
   common: "commonRelics",
@@ -117,40 +127,64 @@ const TIER_POOL_KEY: Record<RelicPoolTier, keyof RunState["pools"]> = {
   boss: "bossRelics",
 };
 
-/** Pool search order per tier, with the game's exhaustion fallbacks:
- *  common -> uncommon -> rare -> CIRCLET; shop -> uncommon;
- *  boss -> RED_CIRCLET (meta.relicTierRolls.poolExhaustionFallbacks). */
-function tierChain(tier: RelicPoolTier): RelicPoolTier[] {
-  return tier === "common"
-    ? ["common", "uncommon", "rare"]
-    : tier === "uncommon"
-      ? ["uncommon", "rare"]
-      : tier === "rare"
-        ? ["rare"]
-        : tier === "shop"
-          ? ["shop", "uncommon", "rare"]
-          : ["boss"];
+function tierPool(run: RunState, tier: RelicPoolTier): RelicId[] {
+  return run.pools[TIER_POOL_KEY[tier]] as RelicId[];
 }
 
-/** What obtainRelicFromPool would hand over, WITHOUT consuming it. The pools
- *  are shuffled at run start, so this is exact (the chest UI reads it to name
- *  the relic before you commit to the sapphire key). */
-export function peekRelicFromPool(run: RunState, tier: RelicPoolTier): RelicId {
-  for (const t of tierChain(tier)) {
-    const id = (run.pools[TIER_POOL_KEY[t]] as RelicId[])[0];
-    if (id !== undefined) return id;
-  }
-  return tier === "boss" ? "RED_CIRCLET" : "CIRCLET";
+function relicCanSpawn(ctx: EffectCtx, id: RelicId, inShop: boolean): boolean {
+  const def = ctx.bundle.relics.get(id);
+  return def?.canSpawn ? def.canSpawn(ctx, inShop) : true;
 }
 
-/** Consume the front of a shuffled tier pool (see tierChain for fallbacks). */
-export function obtainRelicFromPool(run: RunState, tier: RelicPoolTier): RelicId {
-  for (const t of tierChain(tier)) {
-    const pool = run.pools[TIER_POOL_KEY[t]] as RelicId[];
-    const id = pool.shift();
-    if (id !== undefined) return id;
+/** Empty-pool fallback shared by both ends (the next tier is always drawn from the front). */
+function emptyPoolFallback(ctx: EffectCtx, tier: RelicPoolTier, inShop: boolean): RelicId {
+  if (tier === "common" || tier === "shop") return returnRandomRelicKey(ctx, "uncommon", inShop);
+  if (tier === "uncommon") return returnRandomRelicKey(ctx, "rare", inShop);
+  return tier === "rare" ? "CIRCLET" : "RED_CIRCLET";
+}
+
+function returnRandomRelicKey(ctx: EffectCtx, tier: RelicPoolTier, inShop: boolean): RelicId {
+  const pool = tierPool(ctx.run, tier);
+  const id = pool.length === 0 ? emptyPoolFallback(ctx, tier, inShop) : pool.shift()!;
+  return relicCanSpawn(ctx, id, inShop) ? id : returnEndRandomRelicKey(ctx, tier, inShop);
+}
+
+function returnEndRandomRelicKey(ctx: EffectCtx, tier: RelicPoolTier, inShop: boolean): RelicId {
+  const pool = tierPool(ctx.run, tier);
+  const id = pool.length === 0 ? emptyPoolFallback(ctx, tier, inShop) : tier === "boss" ? pool.shift()! : pool.pop()!;
+  return relicCanSpawn(ctx, id, inShop) ? id : returnEndRandomRelicKey(ctx, tier, inShop);
+}
+
+/** AbstractDungeon.returnRandomRelic: consume a relic from the front of the
+ *  pool (elites, chests, bosses, Neow, events, Matryoshka). `inShop` is only
+ *  for canSpawn's getCurrRoom() instanceof ShopRoom. */
+export function obtainRelicFromPool(ctx: EffectCtx, tier: RelicPoolTier, inShop = false): RelicId {
+  return returnRandomRelicKey(ctx, tier, inShop);
+}
+
+/** AbstractDungeon.returnRandomRelicEnd: the merchant's draw from the END. */
+export function obtainRelicFromPoolEnd(ctx: EffectCtx, tier: RelicPoolTier, inShop = false): RelicId {
+  return returnEndRandomRelicKey(ctx, tier, inShop);
+}
+
+/** returnRandomNonCampfireRelic (Black Star): Peace Pipe, Shovel and Girya
+ *  are drawn and thrown away. */
+export function obtainNonCampfireRelic(ctx: EffectCtx, tier: RelicPoolTier): RelicId {
+  let id = obtainRelicFromPool(ctx, tier);
+  while (id === "PEACE_PIPE" || id === "SHOVEL" || id === "GIRYA") id = obtainRelicFromPool(ctx, tier);
+  return id;
+}
+
+/** What obtainRelicFromPool would hand over, WITHOUT consuming anything: the
+ *  same draw run against copies of the pools (canSpawn reads no rng). */
+export function peekRelicFromPool(ctx: EffectCtx, tier: RelicPoolTier, inShop = false): RelicId {
+  const tiers = Object.keys(TIER_POOL_KEY) as RelicPoolTier[];
+  const saved = tiers.map((t) => [...tierPool(ctx.run, t)]);
+  try {
+    return obtainRelicFromPool(ctx, tier, inShop);
+  } finally {
+    tiers.forEach((t, i) => tierPool(ctx.run, t).splice(0, Infinity, ...saved[i]!));
   }
-  return tier === "boss" ? "RED_CIRCLET" : "CIRCLET";
 }
 
 // --- card rewards ----------------------------------------------------------------
@@ -291,8 +325,14 @@ export function rollGoldReward(ctx: EffectCtx, room: "monster" | "elite" | "boss
     // A13 "Poor bosses" applies BEFORE the Golden Idol bonus
     if (run.ascension >= 13) gold = Math.round(gold * GOLD_REWARDS.ascension13BossFactor);
   }
-  if (hasRelic(run, "GOLDEN_IDOL")) gold += Math.round(gold * GOLD_REWARDS.goldenIdolFactor);
-  return gold;
+  return withGoldenIdolBonus(run, gold);
+}
+
+/** RewardItem.applyGoldBonus: every non-stolen gold reward outside a treasure
+ *  room gets Golden Idol's MathUtils.round(gold * 0.25f) on top (combat, boss,
+ *  event and Tiny House gold alike). */
+export function withGoldenIdolBonus(run: RunState, gold: number): number {
+  return hasRelic(run, "GOLDEN_IDOL") ? gold + Math.round(gold * GOLD_REWARDS.goldenIdolFactor) : gold;
 }
 
 // --- relic tier rolls -------------------------------------------------------------
@@ -365,7 +405,12 @@ export function buildCombatRewards(ctx: EffectCtx, room: "monster" | "elite" | "
   if (stolenGold > 0) entries.push({ kind: "gold", amount: stolenGold, taken: false });
 
   if (room === "elite") {
-    entries.push({ kind: "relic", id: obtainRelicFromPool(run, eliteRelicTier(ctx)), taken: false });
+    entries.push({ kind: "relic", id: obtainRelicFromPool(ctx, eliteRelicTier(ctx)), taken: false });
+    // MonsterRoomElite.dropReward: Black Star adds a second, non-campfire
+    // relic off a fresh elite tier roll, before the emerald key
+    if (hasRelic(run, "BLACK_STAR")) {
+      entries.push({ kind: "relic", id: obtainNonCampfireRelic(ctx, eliteRelicTier(ctx)), taken: false });
+    }
     if (burningElite && !run.keys.emerald) entries.push({ kind: "emeraldKey", taken: false });
   }
 

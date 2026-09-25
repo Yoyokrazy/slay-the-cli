@@ -4,9 +4,9 @@
 //    combat-only triggers (wasHPLost, bloodied hooks) do NOT fire out of combat
 //    (they enqueue combat actions that could never drain).
 //  - heals fold onHeal (Mark of the Bloom zeroes them), floor, clamp.
-//  - card obtains veto through onObtainCard (Omamori) and fold egg upgrades,
-//    matching runFlow's addCardToDeck; gold gains fold onGainGold
-//    (Ectoplasm, Bloody Idol), matching runFlow's gainGold.
+//  - card obtains veto through canObtainCard (Omamori, before any onObtainCard
+//    fires) and fold egg upgrades, matching runFlow's addCardToDeck; gold gains
+//    fold onGainGold (Ectoplasm, Bloody Idol), matching runFlow's gainGold.
 //  - "screenless" random relics roll tier with relicRng (50/33/17) and pop the
 //    run-start shuffled pool, rerolling BOTTLED_* / WHETSTONE (corpus
 //    events.json meta note); popped rerolls are consumed, like the reference.
@@ -34,6 +34,7 @@ import {
   rollCardRarity,
   rollPotionReward,
   upgradeChance,
+  withGoldenIdolBonus,
   CARD_REWARD,
   type RolledCard,
 } from "../../engine/run/rewards";
@@ -282,7 +283,7 @@ export function screenlessRelicOfTier(ctx: EffectCtx, tier: "common" | "uncommon
   let id: RelicId;
   let guard = 0;
   do {
-    id = obtainRelicFromPool(ctx.run, tier);
+    id = obtainRelicFromPool(ctx, tier);
   } while (SCREENLESS_REROLL.has(id) && ++guard < 100);
   return id;
 }
@@ -324,7 +325,9 @@ export function eventCombatRewards(
   },
 ): RewardEntry[] {
   const entries: RewardEntry[] = [];
-  if (opts.gold !== undefined && opts.gold > 0) entries.push({ kind: "gold", amount: opts.gold, taken: false });
+  if (opts.gold !== undefined && opts.gold > 0) {
+    entries.push({ kind: "gold", amount: withGoldenIdolBonus(ctx.run, opts.gold), taken: false });
+  }
   for (const id of opts.relics ?? []) entries.push({ kind: "relic", id, taken: false });
   if (opts.potionRoll) {
     const p = rollPotionReward(ctx, entries.length);

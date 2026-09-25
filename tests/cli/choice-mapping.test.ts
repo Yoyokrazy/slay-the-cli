@@ -219,7 +219,9 @@ describe("positional choice contracts stay unchanged", () => {
     ui = pressUi(pending, ui, ch("1"));
     const action = mapKey(ENTER, buildView(pending, ui, bundle));
     expectChoose(action, [19, 0]);
-    expect(choose(pending, action).run.deck).toEqual(game.run.deck.filter((_, i) => i !== 1 && i !== 25));
+    // EmptyCage lists every purgeable card, bottled ones included, so the
+    // positions here are the deck indices themselves
+    expect(choose(pending, action).run.deck).toEqual(game.run.deck.filter((_, i) => i !== 0 && i !== 19));
   });
 
   test("combat card picks send candidate positions, not instance IDs", () => {

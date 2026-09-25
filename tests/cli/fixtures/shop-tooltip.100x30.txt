@@ -11,9 +11,9 @@
  +----[1]-----++----[2]-----++----[3]-----++----[4]-----++----[5]-----++----[6]-----++----[7]-----+ 
       23G           48G           47G           68G           70G           90G        need 174G    
 -- RELICS / POTIONS --------------------------------------------------------------------------------
-> [8] Potion Belt          common     need 143G  Upon pickup, gain 2 Potion slots.                  
-  [9] Tiny Chest           common     need 157G  Every 4th ? room is a Treasure room.               
-  [0] Hand Drill           shop       need 156G  Whenever you break an enemy's Block, apply 2 Vulner
+> [8] Regal Pillow         common     need 148G  Whenever you Rest, heal an additional 15 HP.       
+  [9] Ice Cream            rare       need 315G  Energy is now conserved between turns.             
+  [0] Clockwork Souvenir   shop       need 156G  Start each combat with 1 Artifact.                 
   [.] Regen Potion         uncommon         78G  Gain 5 Regeneration.                               
   [.] Swift Potion         common           50G  Draw 3 cards.                                      
   [.] Power Potion         common           50G  Choose 1 of 3 random Power cards to add to your han
@@ -25,6 +25,6 @@
   [Enter] Leave the shop                                                                            
   page 1/2 - [n] next [p] prev - hotkeys act on this page                                           
 -- INFO --------------------------------------------------------------------------------------------
- RELIC  Potion Belt  Relic - common - 143G                                                          
-   Upon pickup, gain 2 Potion slots.                                                                
+ RELIC  Regal Pillow  Relic - common - 148G                                                         
+   Whenever you Rest, heal an additional 15 HP.                                                     
 [1-0] buy [n/p] page [i] inspect [Enter] leave [P] potions [d/r/m] [q] quit                         

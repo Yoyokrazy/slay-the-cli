@@ -19,6 +19,7 @@ import type { CharacterId } from "../../engine/core/ids";
 import type { HookCtx } from "../../engine/core/hooks";
 import { foldHook, fireHook } from "../../engine/core/hooks";
 import { PLAYER, monster } from "../../engine/core/ids";
+import { JavaRandom, javaShuffle } from "../../engine/core/rng";
 import { makeTempCard } from "../../engine/combat/interpreter";
 import { moveCard } from "../../engine/combat/piles";
 
@@ -65,6 +66,49 @@ export function gainGold(ctx: EffectCtx, amount: number): void {
   if (n > 0) ctx.run.gold += n;
 }
 
+/** AbstractCreature.increaseMaxHp(n, true): raise the cap, then heal n through
+ *  the heal path, so Mark of the Bloom blocks the heal and Magic Flower boosts
+ *  it during combat. */
+export function increaseMaxHp(ctx: EffectCtx, amount: number): void {
+  ctx.run.maxHp += amount;
+  healPlayer(ctx, amount);
+}
+
+// --- canSpawn (AbstractRelic.canSpawn overrides; no Endless mode here) --------------
+
+/** `Settings.isEndless || AbstractDungeon.floorNum <= n` */
+export const spawnsUpToFloor =
+  (n: number) =>
+  (ctx: EffectCtx): boolean =>
+    ctx.run.floor <= n;
+
+/** Maw Bank, Smiling Mask, Old Coin, The Courier: floor <= 48 and never
+ *  rolled while standing in a shop. */
+export const spawnsOutsideShops = (ctx: EffectCtx, inShop: boolean): boolean => ctx.run.floor <= 48 && !inShop;
+
+/** Girya / Peace Pipe / Shovel: before floor 48, and fewer than two of the
+ *  three campfire relics already owned. */
+export function campfireRelicCanSpawn(ctx: EffectCtx): boolean {
+  if (ctx.run.floor >= 48) return false;
+  const owned = ctx.run.relics.filter((r) => r.defId === "PEACE_PIPE" || r.defId === "SHOVEL" || r.defId === "GIRYA");
+  return owned.length < 2;
+}
+
+/** Bottled Flame / Lightning: some non-BASIC card of that type in the deck. */
+export const deckHasNonBasic =
+  (type: "attack" | "skill") =>
+  (ctx: EffectCtx): boolean =>
+    ctx.run.deck.some((mc) => {
+      const d = ctx.bundle.cards.get(mc.defId);
+      return d?.type === type && d.rarity !== "basic";
+    });
+
+/** Boss relics that upgrade a starter (Black Blood needs Burning Blood). */
+export const ownsRelic =
+  (id: string) =>
+  (ctx: EffectCtx): boolean =>
+    ctx.run.relics.some((r) => r.defId === id);
+
 export function charColor(character: CharacterId): "red" | "green" | "blue" | "purple" {
   switch (character) {
     case "IRONCLAD":
@@ -99,6 +143,46 @@ export function classPoolFilter(ctx: EffectCtx, type?: "attack" | "skill" | "pow
 /** Colorless obtainable pool (Toolbox, Colorless Potion). DEPENDS: colorless cards. */
 export function colorlessPoolFilter(): (d: CardDef) => boolean {
   return (d) => d.color === "colorless" && (d.rarity === "uncommon" || d.rarity === "rare");
+}
+
+/** CardTags.HEALING: never generated in combat (Feed, Reaper, Bandage Up, Bite). */
+export function isHealingCard(d: CardDef): boolean {
+  return d.keywords.includes("tag:healing") || (d.upgradeKeywords?.includes("tag:healing") ?? false);
+}
+
+/** returnTrulyRandomCardInCombat(type?) pool (AbstractDungeon.java:1324-1398):
+ *  the class pool with HEALING cards left out. */
+export function inCombatClassPoolFilter(ctx: EffectCtx, type?: "attack" | "skill" | "power"): (d: CardDef) => boolean {
+  const base = classPoolFilter(ctx, type);
+  return (d) => base(d) && !isHealingCard(d);
+}
+
+/** returnTrulyRandomColorlessCardInCombat pool (AbstractDungeon.java:1409-1421). */
+export function inCombatColorlessPoolFilter(): (d: CardDef) => boolean {
+  const base = colorlessPoolFilter();
+  return (d) => base(d) && !isHealingCard(d);
+}
+
+/** One in-combat random card: list.get(cardRandomRng.random(size - 1)). */
+export function randomCardDefInCombat(ctx: EffectCtx, pred: (d: CardDef) => boolean): CardDef | null {
+  const pool = [...ctx.bundle.cards.values()].filter(pred);
+  if (pool.length === 0) return null;
+  return pool[ctx.rng("cardRandomRng").random(pool.length - 1)]!;
+}
+
+/** generateCardChoices (ChooseOneColorless, CodexAction): uniform draws from
+ *  the whole pool until n distinct ids; a duplicate is rerolled, and every
+ *  reroll consumes a cardRandomRng draw. */
+export function cardChoicesInCombat(ctx: EffectCtx, n: number, pred: (d: CardDef) => boolean): CardDef[] {
+  const pool = [...ctx.bundle.cards.values()].filter(pred);
+  const want = Math.min(n, new Set(pool.map((d) => d.id)).size);
+  const out: CardDef[] = [];
+  const rng = ctx.rng("cardRandomRng");
+  while (out.length < want) {
+    const d = pool[rng.random(pool.length - 1)]!;
+    if (!out.some((o) => o.id === d.id)) out.push(d);
+  }
+  return out;
 }
 
 /**
@@ -223,6 +307,68 @@ const shuffleChosenIntoDraw: EffectFn = (ctx, args) => {
   ctx.queue.addToBottom({ kind: "makeTempCard", defId, upgrades: 0, dest: "draw", n: 1 });
 };
 
+/** Open a 1-of-N card pick right now, from inside a resolving action (the
+ *  game builds the choices in the action's update, not when it was queued). */
+function openCardPickNow(
+  ctx: EffectCtx,
+  defs: CardDef[],
+  opts: { reason: string; skippable: boolean; dest: "hand" | "draw" },
+): void {
+  if (defs.length === 0) return;
+  ensureContentEffects(ctx);
+  const names = defs.map((d) => d.name);
+  ctx.requestChoice({
+    request: { kind: "option", options: opts.skippable ? [...names, "Skip"] : names, reason: opts.reason },
+    resume: opts.dest === "hand" ? "content:addChosenCardToHand" : "content:shuffleChosenIntoDraw",
+    resumeArgs: { defIds: defs.map((d) => d.id), copies: 1, costZero: false },
+  });
+}
+
+/** Toolbox's ChooseOneColorless: 3 distinct colorless cards, no skip. */
+const toolboxChoose: EffectFn = (ctx) => {
+  if (!ctx.combat || ctx.rt.combatOver) return;
+  openCardPickNow(ctx, cardChoicesInCombat(ctx, 3, inCombatColorlessPoolFilter()), {
+    reason: "Toolbox",
+    skippable: false,
+    dest: "hand",
+  });
+};
+
+/** Nilry's Codex's CodexAction: 3 distinct class cards, skippable, the pick
+ *  shuffled into the draw pile; nothing once the enemies are all dead. */
+const codexChoose: EffectFn = (ctx) => {
+  if (!ctx.combat || ctx.rt.combatOver) return;
+  openCardPickNow(ctx, cardChoicesInCombat(ctx, 3, inCombatClassPoolFilter(ctx)), {
+    reason: "Nilry's Codex",
+    skippable: true,
+    dest: "draw",
+  });
+};
+
+/** UpgradeRandomCardAction (Warped Tongs): the upgradeable hand cards in hand
+ *  order, java-shuffled off shuffleRng (CardGroup.shuffle()), first one upgraded. */
+const upgradeRandomHandCard: EffectFn = (ctx) => {
+  const combat = ctx.combat;
+  if (!combat || combat.player.piles.hand.length === 0) return;
+  const upgradeable = combat.player.piles.hand.filter((iid) => canUpgradeInCombat(ctx, combat.cards[iid]!));
+  if (upgradeable.length === 0) return;
+  javaShuffle(upgradeable, new JavaRandom(ctx.rng("shuffleRng").randomLong()));
+  upgradeInCombat(ctx, combat.cards[upgradeable[0]!]!);
+};
+
+/** RemoveDebuffsAction (Orange Pellets): every player debuff present when the
+ *  action RESOLVES, a negative Strength / Dexterity / Focus included (those
+ *  powers flip to DEBUFF below zero). */
+const removePlayerDebuffs: EffectFn = (ctx) => {
+  const combat = ctx.combat;
+  if (!combat) return;
+  for (const p of combat.player.powers) {
+    const def = ctx.bundle.powers.get(p.id);
+    const debuff = def?.kind === "debuff" || (def?.canGoNegative === true && p.amount < 0);
+    if (debuff) ctx.queue.addToTop({ kind: "removePower", target: PLAYER, powerId: p.id });
+  }
+};
+
 export const contentEffects: ReadonlyArray<readonly [string, EffectFn]> = [
   ["content:exhaustChosen", exhaustChosen],
   ["content:discardChosenThenDraw", discardChosenThenDraw],
@@ -230,6 +376,10 @@ export const contentEffects: ReadonlyArray<readonly [string, EffectFn]> = [
   ["content:stanceChosen", stanceChosen],
   ["content:addChosenCardToHand", addChosenCardToHand],
   ["content:shuffleChosenIntoDraw", shuffleChosenIntoDraw],
+  ["content:toolboxChoose", toolboxChoose],
+  ["content:codexChoose", codexChoose],
+  ["content:upgradeRandomHandCard", upgradeRandomHandCard],
+  ["content:removePlayerDebuffs", removePlayerDebuffs],
 ];
 
 /** Lazily register the continuations into the live bundle (idempotent). */
@@ -237,6 +387,12 @@ export function ensureContentEffects(ctx: EffectCtx): void {
   for (const [id, fn] of contentEffects) {
     if (!ctx.bundle.effects.has(id)) ctx.bundle.effects.set(id, fn);
   }
+}
+
+/** addToBot of one of the registered actions above (resolves in queue order). */
+export function queueContentEffect(ctx: EffectCtx, ref: string): void {
+  ensureContentEffects(ctx);
+  ctx.queue.addToBottom({ kind: "effect", ref });
 }
 
 /** Enqueue a "pick 1 of N generated cards" choice (Discovery-style). */

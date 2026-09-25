@@ -17,6 +17,7 @@ import type {
 import type { ContentBundle, CardDef, EffectCtx } from "../../engine/content/defs";
 import type { OrbInstance, PowerInstance } from "../../engine/combat/combatState";
 import { restHealAmount } from "../../engine/run/rest";
+import { migrateLegacyRunState } from "../../engine/run/runFlow";
 export { BOSS_DOOR_Y, legalMapPicks, type MapPick } from "../../engine/run/mapTraversal";
 import { buildEventScreen } from "../../engine/run/eventRuntime";
 import { RngRegistry } from "../../engine/core/rngRegistry";
@@ -52,6 +53,7 @@ export function validateSavedRun(parsed: unknown): GameState | null {
   if (!Array.isArray(run.deck) || !Array.isArray(run.potions)) return null;
   if (!run.room || typeof run.room.kind !== "string") return null;
   if (typeof run.hp !== "number" || typeof run.floor !== "number") return null;
+  if (run.history && Array.isArray(run.relics)) migrateLegacyRunState(run as RunState);
   return s as GameState;
 }
 
@@ -379,6 +381,7 @@ export function orbName(bundle: ContentBundle, id: string): string {
 
 /** Actual HP a rest would restore right now (30% of max, capped by missing). */
 export function restHealPreview(run: RunState): number {
+  if (run.relics.some((r) => r.defId === "MARK_OF_THE_BLOOM")) return 0; // the rest heal is a heal
   return Math.min(run.maxHp - run.hp, restHealAmount(run.maxHp));
 }
 
@@ -496,6 +499,8 @@ export function describeChoiceReason(reason: string): string {
       return "Choose cards to remove";
     case "relic:transform":
       return "Choose cards to transform, then upgrade";
+    case "relic:duplicate":
+      return "Choose a card to duplicate";
     // the bottles, in the relic's own words ("choose an Attack card")
     case "relic:bottle:attack":
       return "Choose an Attack card";

@@ -45,6 +45,9 @@ export interface Hooks {
   onEnergyRecharge?(ctx: HookCtx): void;
   // --- card lifecycle ---
   canPlayCard?(ctx: HookCtx, card: CardInstance): boolean; // Velvet Choker, Normality, Entangled
+  /** any source returning true makes a cost -2 card playable (AbstractCard.canUse:
+   *  Blue Candle for curses, Medical Kit for statuses) */
+  canPlayUnplayable?(ctx: HookCtx, card: CardInstance): boolean;
   /** fold: (ctx, cost, card) - value-first like all fold hooks */
   modifyCardCost?(ctx: HookCtx, cost: number, card: CardInstance): number; // Corruption
   onUseCard?(ctx: HookCtx, card: CardInstance, target: number | null): void; // during resolution
@@ -82,7 +85,9 @@ export interface Hooks {
   // --- life & death ---
   onHeal?(ctx: HookCtx, amount: number): number; // Magic Flower, Mark of the Bloom
   onMonsterDeath?(ctx: HookCtx, m: MonsterState): void; // Gremlin Horn, Corpse Explosion
-  onVictory?(ctx: HookCtx): void; // Burning Blood, Meat on the Bone
+  /** fires before every onVictory (AbstractRoom.endBattle runs Meat on the Bone's onTrigger first) */
+  onVictoryFirst?(ctx: HookCtx): void;
+  onVictory?(ctx: HookCtx): void; // Burning Blood, Black Blood
   onBloodied?(ctx: HookCtx): void; // Red Skull (<=50%)
   onNotBloodied?(ctx: HookCtx): void;
   // --- defect ---
@@ -93,12 +98,19 @@ export interface Hooks {
   onChangeStance?(ctx: HookCtx, from: string, to: string): void; // Mental Fortress, Rushdown
   // --- run-level (relics only) ---
   onGainGold?(ctx: HookCtx, amount: number): number;
-  onObtainCard?(ctx: HookCtx, defId: CardId): boolean | void; // Omamori veto for curses
-  onEnterRoom?(ctx: HookCtx, roomKind: string): void;
+  /** veto pass before any onObtainCard fires (Omamori negates the curse first) */
+  canObtainCard?(ctx: HookCtx, defId: CardId): boolean | void;
+  onObtainCard?(ctx: HookCtx, defId: CardId): void; // Ceramic Fish, Darkstone Periapt
+  onEnterRoom?(ctx: HookCtx, roomKind: string): void; // before a ? node resolves ("event")
+  /** after the room is known (AbstractRelic.justEnteredRoom): Meal Ticket's shop */
+  justEnteredRoom?(ctx: HookCtx, roomKind: string): void;
   onEnterRestSite?(ctx: HookCtx): void;
   onRest?(ctx: HookCtx): void;
   onSmith?(ctx: HookCtx): void;
   onChestOpen?(ctx: HookCtx, isBossChest: boolean, extraRelics: RelicId[]): void;
+  /** AbstractChest.open's last step (N'loth's Hungry Face): `rewards` holds the
+   *  relic rewards in list order, Matryoshka's extras before the chest's own */
+  onChestOpenAfter?(ctx: HookCtx, isBossChest: boolean, rewards: { extras: RelicId[]; chestRelic: RelicId | null }): void;
   onUsePotion?(ctx: HookCtx): void; // Toy Ornithopter
   modifyRewards?(ctx: HookCtx, rewards: unknown): void; // Question Card, Busted Crown
   modifyPrice?(ctx: HookCtx, basePrice: number): number; // Membership Card, Courier

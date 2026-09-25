@@ -6,7 +6,7 @@ import { curseCards } from "../../src/content/cards/curses";
 import { makeRunTestBundle } from "./runTestBundle";
 import { makeTestCtx, autoWinCombat, stepRun, walkUntil, runSignature } from "./runCtx";
 import { generateEncounters, getActDef } from "../../src/engine/run/encounters";
-import { resolveUnknownRoom, generateEventId, UNKNOWN_ROOM } from "../../src/engine/run/runFlow";
+import { resolveUnknownRoom, generateEventId, UNKNOWN_ROOM, migrateLegacyRunState } from "../../src/engine/run/runFlow";
 import { restHealAmount } from "../../src/engine/run/rest";
 import { generateShop } from "../../src/engine/run/shop";
 import { setupTreasureRoom } from "../../src/engine/run/treasure";
@@ -613,15 +613,59 @@ describe("? room resolution", () => {
     expect(resolveUnknownRoom(ctx2)).toBe("shop");
   });
 
-  test("Tiny Chest forces every 4th ? room to treasure without consuming the roll", () => {
+  test("Tiny Chest forces every 4th ? room to treasure, still drawing the roll first", () => {
+    // EventHelper.roll: `float roll = eventRng.random()` comes before the Tiny Chest check
     const { s, ctx, registry } = freshCtx("TINY");
-    s.run.relics.push({ defId: "TINY_CHEST", counter: 0 });
-    s.run.history.tinyChestCounter = 3;
+    s.run.relics.push({ defId: "TINY_CHEST", counter: 3 });
     const counterBefore = registry.get("eventRng").counter;
     expect(resolveUnknownRoom(ctx)).toBe("treasure");
-    expect(registry.get("eventRng").counter).toBe(counterBefore); // bypassed
-    expect(s.run.history.tinyChestCounter).toBe(0);
+    expect(registry.get("eventRng").counter).toBe(counterBefore + 1); // consumed, then overridden
+    expect(s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(0);
     expect(s.run.blizzard.treasureChance).toBeCloseTo(0.02, 6); // reset as "chosen"
+  });
+
+  test("Tiny Chest counts on the relic for every ? room, events included", () => {
+    // EventHelper.java:87-88 `AbstractRelic r = ...getRelic("Tiny Chest"); r.counter++;`
+    const { s, ctx } = freshCtx("TINYEV");
+    s.run.relics.push({ defId: "TINY_CHEST", counter: 0 });
+    s.run.blizzard.monsterChance = 0;
+    s.run.blizzard.shopChance = 0;
+    s.run.blizzard.treasureChance = 0;
+    expect(resolveUnknownRoom(ctx)).toBe("event");
+    expect(s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(1);
+  });
+
+  test("outcome table fills from index min(99, fill): a saturated monster share leaves slot 99 to treasure", () => {
+    // EventHelper.java:121-125: MONSTER [0,100), then SHOP and TREASURE both
+    // "Arrays.fill(possibleResults, Math.min(99, fillIndex), ...)" -> slot 99
+    const outcomes = new Set<string>();
+    for (let i = 0; i < 400; i++) {
+      const { s, ctx } = freshCtx(`USAT${i}`);
+      s.run.blizzard.monsterChance = 1.1;
+      outcomes.add(resolveUnknownRoom(ctx));
+    }
+    expect([...outcomes].sort()).toEqual(["monster", "treasure"]);
+  });
+
+  test("an old save's history.tinyChestCounter moves onto the relic once", () => {
+    const { s } = freshCtx("TINYMIG");
+    s.run.relics.push({ defId: "TINY_CHEST", counter: 0 });
+    (s.run.history as Record<string, unknown>).tinyChestCounter = 3;
+    migrateLegacyRunState(s.run);
+    expect("tinyChestCounter" in s.run.history).toBe(false);
+    expect(s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(3);
+    // once: a later pass leaves the relic counter alone
+    s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter = 1;
+    migrateLegacyRunState(s.run);
+    expect(s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(1);
+  });
+
+  test("an old save without Tiny Chest just drops history.tinyChestCounter", () => {
+    const { s } = freshCtx("TINYMIG2");
+    (s.run.history as Record<string, unknown>).tinyChestCounter = 2;
+    migrateLegacyRunState(s.run);
+    expect("tinyChestCounter" in s.run.history).toBe(false);
+    expect(s.run.relics.some((r) => r.defId === "TINY_CHEST")).toBe(false);
   });
 
   test("Juzu Bracelet converts MONSTER to EVENT (monster chance still resets)", () => {
