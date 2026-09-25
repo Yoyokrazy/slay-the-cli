@@ -8,14 +8,14 @@
    |  ___ __|\_/|__ ___  |                                                                                                          
    |_/___X_________X___\_|                                                                                                          
 -- CARDS ---------------------------------------------------------------------------------------------------------------------------
-+(1)-------------+ +(1)-------------+ +(0)-------------+ +(0)-------------+ +(1)-------------+ +(1)-------------+ +(0)-------------+
-| Cleave         | | Sword Boomeran | | Flex           | | Intimidate     | | Rupture        | | Madness        | | Secret Weapon  |
-| Deal 8 damage  | | Deal 3 damage  | | Gain 2         | | Apply 1 Weak   | | Whenever you   | | Reduce the     | | Put an Attack  |
-| to ALL         | | to a random    | | Strength.      | | to ALL         | | lose HP from a | | cost of a      | | from your draw |
-| enemies.       | | enemy 3 times. | | At the end of  | | enemies.       | | card,          | | random card in | | pile into your |
-|                | |                | | this turn,...  | | Exhaust.       | | gain 1...      | | your hand...   | | hand. +        |
++(2)-------------+ +(1)-------------+ +(0)-------------+ +(1)-------------+ +(2)-------------+ +(0)-------------+ +(2)-------------+
+| Searing Blow   | | Cleave         | | Flex           | | Disarm         | | Dark Embrace   | | Trip           | | Chrysalis      |
+| Deal 12        | | Deal 8 damage  | | Gain 2         | | Enemy loses 2  | | Whenever a     | | Apply 2        | | Shuffle 3      |
+| damage.        | | to ALL         | | Strength.      | | Strength.      | | card is        | | Vulnerable.    | | random Skills  |
+| Can be         | | enemies.       | | At the end of  | | Exhaust.       | | Exhausted,     | |                | | into your draw |
+| Upgraded...    | |                | | this turn,...  | |                | | draw 1 card.   | |                | | pile. They...  |
 +------[1]-------+ +------[2]-------+ +------[3]-------+ +------[4]-------+ +------[5]-------+ +------[6]-------+ +------[7]-------+
-       23G                48G                47G                68G                70G                90G             need 174G     
+       34G                48G                47G                68G                70G                90G             need 174G     
 -- RELICS / POTIONS ----------------------------------------------------------------------------------------------------------------
   [8] Regal Pillow         common     need 148G  Whenever you Rest, heal an additional 15 HP.                                       
   [9] Ice Cream            rare       need 315G  Energy is now conserved between turns.                                             

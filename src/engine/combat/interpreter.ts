@@ -403,7 +403,8 @@ function tryUseLizardTail(ctx: EffectCtx): boolean {
 }
 
 function healFromDeathSave(ctx: EffectCtx, percent: number): void {
-  const amount = Math.floor((ctx.run.maxHp * percent) / 100);
+  // FairyPotion.use / LizardTail.onTrigger: "if(healAmt < 1) healAmt = 1"
+  const amount = Math.max(1, Math.floor((ctx.run.maxHp * percent) / 100));
   const healed = Math.floor(foldHook(ctx, PLAYER, "onHeal", amount));
   const was = ctx.run.hp;
   ctx.run.hp = Math.min(ctx.run.maxHp, ctx.run.hp + healed);
@@ -948,18 +949,19 @@ function executeMonsterMove(ctx: EffectCtx, idx: number): void {
   // re-checks isDeadOrEscaped here before takeTurn (MonsterGroup::doMonsterTurn),
   // so a monster that died in that phase does not act.
   if (m.isDead || m.isEscaped) return;
+  const move = m.move ? def.moves[m.move] : undefined;
   if (m.move) {
-    const move = def.moves[m.move];
     if (!move) throw new Error(`unknown move ${m.move} on ${m.id}`);
     move.execute(ctx, m);
   }
-  // roll next move (intent for the coming turn)
-  if (!m.isDead && !m.isEscaped) rollMove(ctx, m);
+  // roll next move (intent for the coming turn); a chained move set it in
+  // takeTurn without a RollMoveAction, so no aiRng roll is consumed
+  if (!m.isDead && !m.isEscaped) rollMove(ctx, m, move?.chainsNextMove === true);
 }
 
-export function rollMove(ctx: EffectCtx, m: MonsterState): void {
+export function rollMove(ctx: EffectCtx, m: MonsterState, chained = false): void {
   const def = ctx.bundle.monsters.get(m.id)!;
-  const roll = ctx.rng("aiRng").random(99);
+  const roll = chained ? -1 : ctx.rng("aiRng").random(99);
   const next = def.getMove(ctx, m, roll);
   m.move = next;
   m.moveHistory.push(next);

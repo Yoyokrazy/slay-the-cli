@@ -1,8 +1,16 @@
-// Combat rewards, exact per data/corpus/meta.json (cardRewards, potionDrop,
-// goldRewards, relicTierRolls) / sts_lightspeed GameContext.cpp:1607-1969.
+// Combat rewards, per data/corpus/meta.json (cardRewards, potionDrop,
+// goldRewards, relicTierRolls), checked line by line against the decompiled
+// game (AbstractDungeon.getRewardCards / rollRarity / returnRandomPotion,
+// AbstractRoom.update + addPotionToRewards, MonsterRoomElite.dropReward,
+// CombatRewardScreen.setupItemReward), which wins where sts_lightspeed's
+// GameContext.cpp disagrees.
 // Stream discipline: gold = treasureRng (boss: miscRng), cards = cardRng,
 // potions = potionRng, relic tiers = relicRng. Relic identities come from the
 // run-start shuffled pools (no rng at obtain time).
+//
+// ENGINE-GAP: AbstractRelic.canSpawn is not modelled at pool pops (floor caps,
+// Ectoplasm act 1, Black Blood/Frozen Core/Holy Water/Ring of the Serpent,
+// bottles, campfire relics); the shop applies its own ShopRoom exclusions.
 
 import type { EffectCtx } from "../content/defs";
 import type { RunState, RewardEntry, CardRarityRoll, RelicPoolTier } from "./runState";
@@ -25,6 +33,9 @@ export const UPGRADE_CHANCES = {
   act2: { base: 0.25, ascension12Plus: 0.125 },
   act3AndBeyond: { base: 0.5, ascension12Plus: 0.25 },
 } as const;
+
+/** AbstractDungeon.colorlessRareChance (Exordium.java:130, every act 0.3F). */
+export const COLORLESS_RARE_CHANCE = 0.3;
 
 export const POTION_DROP = {
   baseChance: 40,
@@ -92,9 +103,10 @@ export function cursePool(ctx: EffectCtx): CardId[] {
   return out;
 }
 
-/** Potions obtainable by this class (shared + class pool), insertion order. */
+/** Potions obtainable by this class (shared + class pool), insertion order.
+ *  PotionHelper.getPotions (PotionHelper.java:46-150) builds this list with no
+ *  Sozu check: Sozu only refuses the potion at the moment it would be obtained. */
 export function potionPool(ctx: EffectCtx): PotionId[] {
-  if (!canObtainPotions(ctx.run)) return [];
   const color = classColor(ctx.run.character);
   const out: PotionId[] = [];
   for (const p of ctx.bundle.potions.values()) {
@@ -191,12 +203,16 @@ export function peekRelicFromPool(ctx: EffectCtx, tier: RelicPoolTier, inShop = 
 
 export type RewardRoomKind = "monster" | "elite" | "boss" | "event" | "rest";
 
-/** rollCardRarity (GameContext.cpp:1607-1630): boss rooms return RARE before
- *  any roll; otherwise d100 + cardRarityFactor vs elite 10/40, non-elite 3/37.
- *  N'loth's Gift triples the rare chance outside rest sites. */
+/** rollRarity (AbstractDungeon.java:2206-2214): "int roll = cardRng.random(99);
+ *  roll += cardBlizzRandomizer;" is ALWAYS consumed, then the room decides:
+ *  MonsterRoomBoss.getCardRarity returns RARE whatever the roll
+ *  (MonsterRoomBoss.java:41-44); elite 10/40 (MonsterRoomElite.java:44-45),
+ *  every other room 3/37 (AbstractRoom.java:164-165). N'loth's Gift triples the
+ *  rare chance except where getCardRarity(roll, false) skips the relic hooks
+ *  (RestRoom.java:48-51, ShopRoom.java:58-61). */
 export function rollCardRarity(ctx: EffectCtx, room: RewardRoomKind): CardRarityRoll {
-  if (room === "boss") return "rare";
   const roll = ctx.rng("cardRng").random(99) + ctx.run.blizzard.cardRarityFactor;
+  if (room === "boss") return "rare";
   let rareChance = room === "elite" ? CARD_REWARD.rareChance.elite : CARD_REWARD.rareChance.nonElite;
   const uncommonChance = room === "elite" ? CARD_REWARD.uncommonChance.elite : CARD_REWARD.uncommonChance.nonElite;
   if (room !== "rest" && hasRelic(ctx.run, "NLOTHS_GIFT")) rareChance *= 3;
@@ -217,21 +233,28 @@ export interface RolledCard {
   upgraded: boolean;
 }
 
-/** createCardReward (GameContext.cpp:1777-1838): 3 cards (+1 Question Card,
- *  -2 Busted Crown); per card: rarity roll -> pity update (common: factor-1
- *  floored at -40; rare: reset to 5) -> uniform class-pool pick with dupe
- *  reroll (id only, not rarity) -> upgrade roll for non-rares when chance > 0. */
-export function createCardReward(ctx: EffectCtx, room: RewardRoomKind): RolledCard[] {
-  const run = ctx.run;
-  const cardRng = ctx.rng("cardRng");
+/** Reward size: 3 cards, then each relic's changeNumberOfCardsInReward
+ *  (QuestionCard.java +1, BustedCrown.java -2). */
+export function cardRewardSize(run: RunState): number {
   let numCards: number = CARD_REWARD.baseCount;
   if (hasRelic(run, "QUESTION_CARD")) numCards += CARD_REWARD.questionCardModifier;
   if (hasRelic(run, "BUSTED_CROWN")) numCards += CARD_REWARD.bustedCrownModifier;
-  numCards = Math.max(1, numCards);
+  return Math.max(1, numCards);
+}
+
+/** getRewardCards (AbstractDungeon.java:1981-2064): per card, rarity roll ->
+ *  pity update (common: factor-1 floored at -40; rare: reset to 5) -> uniform
+ *  class-pool pick with dupe reroll (id only, not rarity). Only after EVERY card
+ *  is picked does the upgrade pass run: "c.rarity != RARE &&
+ *  cardRng.randomBoolean(cardUpgradedChance) && c.canUpgrade()" - one cardRng
+ *  roll per non-rare card, consumed even in Act 1 where the chance is 0. */
+export function createCardReward(ctx: EffectCtx, room: RewardRoomKind): RolledCard[] {
+  const run = ctx.run;
+  const cardRng = ctx.rng("cardRng");
+  const numCards = cardRewardSize(run);
   // TODO PRISMATIC_SHARD: any-color pool draws (burns an extra cardRng.randomLong per card)
 
-  const chance = upgradeChance(run.act, run.ascension);
-  const out: RolledCard[] = [];
+  const picks: { id: CardId; rarity: CardRarityRoll }[] = [];
   for (let i = 0; i < numCards; i++) {
     const rarity = rollCardRarity(ctx, room);
     if (rarity === "rare") run.blizzard.cardRarityFactor = CARD_REWARD.pityInitial;
@@ -244,11 +267,11 @@ export function createCardReward(ctx: EffectCtx, room: RewardRoomKind): RolledCa
     let guard = 0;
     do {
       id = pool[cardRng.random(pool.length - 1)]!;
-    } while (out.some((c) => c.id === id) && ++guard < 1000);
-    const upgraded = rarity !== "rare" && chance > 0 && cardRng.randomBoolean(chance);
-    out.push({ id, rarity, upgraded });
+    } while (picks.some((c) => c.id === id) && ++guard < 1000);
+    picks.push({ id, rarity });
   }
-  return out;
+  const chance = upgradeChance(run.act, run.ascension);
+  return picks.map((p) => ({ ...p, upgraded: p.rarity !== "rare" && cardRng.randomBoolean(chance) }));
 }
 
 // --- potions ---------------------------------------------------------------------
@@ -258,12 +281,13 @@ export interface RandomPotionOptions {
   limited?: boolean;
 }
 
-/** returnRandomPotion (Game.cpp:294-326): rarity d100 (<65 common, <90
- *  uncommon, else rare), then uniform pool draws until the rarity matches.
- *  With `limited`, the spam check starts set, so the first draw is always
- *  redrawn and Fruit Juice never clears it (returnRandomPotionOfRarity). */
+/** returnRandomPotion (AbstractDungeon.java:1186-1211): rarity d100 (<65
+ *  common, <90 uncommon, else rare), then uniform pool draws until the rarity
+ *  matches. With `limited`, the spam check starts set, so the first draw is
+ *  always redrawn and Fruit Juice never clears it. There is no Sozu check here:
+ *  Sozu refuses the potion only where it would be obtained (RewardItem.java
+ *  claim, StorePotion.purchasePotion, ObtainPotionAction). */
 export function returnRandomPotion(ctx: EffectCtx, options: RandomPotionOptions = {}): PotionId | null {
-  if (!canObtainPotions(ctx.run)) return null;
   const potionRng = ctx.rng("potionRng");
   const roll = potionRng.randomRange(0, 99);
   const rarity: CardRarityRoll =
@@ -283,10 +307,11 @@ export function returnRandomPotion(ctx: EffectCtx, options: RandomPotionOptions 
   return id;
 }
 
-/** Obtain a random potion into the first open slot; full belts lose the potion. */
+/** ObtainPotionAction(returnRandomPotion(...)): the potion is rolled first;
+ *  Sozu then refuses it, and a full belt loses it. */
 export function obtainRandomPotion(ctx: EffectCtx, options: RandomPotionOptions = {}): PotionId | null {
   const id = returnRandomPotion(ctx, options);
-  if (!id) return null;
+  if (!id || !canObtainPotions(ctx.run)) return null;
   const slot = ctx.run.potions.indexOf(null);
   if (slot === -1) return null;
   ctx.run.potions[slot] = id;
@@ -294,13 +319,14 @@ export function obtainRandomPotion(ctx: EffectCtx, options: RandomPotionOptions 
   return id;
 }
 
-/** addPotionRewards (GameContext.cpp:1755-1775): chance 40 + potionChance
- *  (White Beast Statue: 100; >= 4 rewards already: 0); the d100 roll is always
- *  consumed unless Sozu blocks potion generation first; pity +/-10 on miss/drop. */
-export function rollPotionReward(ctx: EffectCtx, rewardsSoFar: number): PotionId | null {
+/** addPotionToRewards (AbstractRoom.java:780-815): chance 40 + potionChance
+ *  (White Beast Statue: 100; "rewards.size() >= 4": 0); the d100 roll is always
+ *  consumed and pity moves +/-10 on miss/drop. Sozu does not stop any of it: the
+ *  potion lands on the screen and Sozu refuses it when claimed. `forceZero` is
+ *  the MonsterRoom branch when every monster escaped (chance stays 0). */
+export function rollPotionReward(ctx: EffectCtx, rewardsSoFar: number, forceZero = false): PotionId | null {
   const run = ctx.run;
-  if (!canObtainPotions(run)) return null;
-  let chance = POTION_DROP.baseChance + run.blizzard.potionChance;
+  let chance = forceZero ? 0 : POTION_DROP.baseChance + run.blizzard.potionChance;
   if (hasRelic(run, "WHITE_BEAST_STATUE")) chance = 100;
   if (rewardsSoFar >= 4) chance = 0;
   if (ctx.rng("potionRng").random(99) >= chance) {
@@ -372,13 +398,15 @@ function pushCardGroup(entries: RewardEntry[], cards: RolledCard[]): void {
   }
 }
 
-function rewardCategoryCount(entries: RewardEntry[]): number {
-  // potionCount + relicCount + goldRewardCount + cardRewardCount (card GROUPS)
+/** AbstractRoom.java:803 "rewards.size() >= 4": every RewardItem already in the
+ *  room's list counts (stolen gold, gold, relics, the emerald key); card rewards
+ *  are only added later by setupItemReward. */
+function rewardsSize(entries: RewardEntry[]): number {
   const groups = new Set<number>();
   let n = 0;
   for (const e of entries) {
-    if (e.kind === "gold" || e.kind === "potion" || e.kind === "relic") n++;
-    else if (e.kind === "card") groups.add(e.group);
+    if (e.kind === "card" || e.kind === "bossRelic") groups.add(e.group);
+    else n++;
   }
   return n + groups.size;
 }
@@ -393,16 +421,41 @@ function refundedStolenGold(ctx: EffectCtx): number {
   return total;
 }
 
-/** Build the post-combat rewards screen. Boss rooms only add potion/card while
- *  act < 3 (GameContext.cpp:1953-1969); boss relic choices are appended by the
- *  run flow (boss treasure room), not here. */
-export function buildCombatRewards(ctx: EffectCtx, room: "monster" | "elite" | "boss", burningElite: boolean): RewardEntry[] {
+/** MonsterGroup.haveMonstersEscaped (MonsterGroup.java:171-181): true only
+ *  when EVERY monster in the group escaped (the dead do not count as fled). */
+function everyMonsterEscaped(ctx: EffectCtx): boolean {
+  const monsters = ctx.combat?.monsters ?? [];
+  return monsters.length > 0 && monsters.every((m) => m.isEscaped);
+}
+
+export interface CombatRewardOptions {
+  /** Smoke Bomb: AbstractRoom.update still adds the gold, dropReward() and
+   *  addPotionToRewards() (AbstractRoom.java:413-471), but openCombat(TEXT[1],
+   *  true) never calls setupItemReward, so no card reward is rolled. */
+  smoked?: boolean;
+}
+
+/** Build the post-combat rewards screen in the room's own order
+ *  (AbstractRoom.java:413-471): stolen gold (added when the thief died), the
+ *  end-of-battle gold, dropReward() (elite relic, Black Star relic, emerald
+ *  key), addPotionToRewards(), then the card reward(s) from setupItemReward
+ *  (CombatRewardScreen.java:73-99). A MonsterRoom whose every monster escaped
+ *  pays no gold and its potion chance is 0 (the roll is still consumed). Boss
+ *  rooms only add potion/card while act < 3; boss relic choices are appended by
+ *  the run flow (boss treasure room), not here. */
+export function buildCombatRewards(
+  ctx: EffectCtx,
+  room: "monster" | "elite" | "boss",
+  burningElite: boolean,
+  opts: CombatRewardOptions = {},
+): RewardEntry[] {
   const run = ctx.run;
   const entries: RewardEntry[] = [];
 
-  entries.push({ kind: "gold", amount: rollGoldReward(ctx, room), taken: false });
   const stolenGold = refundedStolenGold(ctx);
   if (stolenGold > 0) entries.push({ kind: "gold", amount: stolenGold, taken: false });
+  const allEscaped = room === "monster" && everyMonsterEscaped(ctx);
+  if (!allEscaped) entries.push({ kind: "gold", amount: rollGoldReward(ctx, room), taken: false });
 
   if (room === "elite") {
     entries.push({ kind: "relic", id: obtainRelicFromPool(ctx, eliteRelicTier(ctx)), taken: false });
@@ -416,11 +469,13 @@ export function buildCombatRewards(ctx: EffectCtx, room: "monster" | "elite" | "
 
   const wantsPotionAndCard = room !== "boss" || run.act < 3;
   if (wantsPotionAndCard) {
-    const potion = rollPotionReward(ctx, rewardCategoryCount(entries));
+    const potion = rollPotionReward(ctx, rewardsSize(entries), allEscaped);
     if (potion) entries.push({ kind: "potion", id: potion, taken: false });
-    pushCardGroup(entries, createCardReward(ctx, room));
-    if (room === "monster" && hasRelic(run, "PRAYER_WHEEL")) {
+    if (!opts.smoked) {
       pushCardGroup(entries, createCardReward(ctx, room));
+      if (room === "monster" && hasRelic(run, "PRAYER_WHEEL")) {
+        pushCardGroup(entries, createCardReward(ctx, room));
+      }
     }
   }
 

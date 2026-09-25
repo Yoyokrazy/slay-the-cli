@@ -1,39 +1,54 @@
 import { test, expect, describe } from "bun:test";
-import { advance, createRun } from "../../src/engine/game";
+import { advance, createRun, type GameState } from "../../src/engine/game";
 import type { RewardEntry, RoomState } from "../../src/engine/run/runState";
 import { makeRunTestBundle } from "./runTestBundle";
 import { makeTestCtx } from "./runCtx";
 import {
   buildCombatRewards,
+  classCardPool,
   createCardReward,
   rollGoldReward,
   rollPotionReward,
   returnRandomPotion,
   obtainRelicFromPool,
+  obtainRelicFromPoolEnd,
   peekRelicFromPool,
 } from "../../src/engine/run/rewards";
+import { Rng } from "../../src/engine/core/rng";
 import { setupTreasureRoom, openChestContents, CHESTS } from "../../src/engine/run/treasure";
 import { generateShop, computeRemovalCost, SHOP } from "../../src/engine/run/shop";
 import { handleCombatVictory } from "../../src/engine/run/runFlow";
 import { buildCombatState } from "../../src/engine/combat/setup";
 import { looter } from "../../src/content/monsters/act1/looter";
 import { mugger } from "../../src/content/monsters/act2/mugger";
+import { allRelics } from "../../src/content/relics";
+import { f32mul } from "../../src/engine/core/math";
 
 const bundle = makeRunTestBundle();
 bundle.monsters.set(looter.id, looter);
 bundle.monsters.set(mugger.id, mugger);
+const courierMembershipBundle = makeRunTestBundle();
+for (const r of allRelics.filter((r) => r.id === "THE_COURIER" || r.id === "MEMBERSHIP_CARD")) {
+  courierMembershipBundle.relics.set(r.id, r);
+}
+const notInShopBundle = makeRunTestBundle();
+for (const r of allRelics.filter((r) => ["THE_COURIER", "MAW_BANK", "OLD_COIN", "SMILING_MASK"].includes(r.id))) {
+  notInShopBundle.relics.set(r.id, r);
+}
 
-function ctxFor(seed: string, ascension = 0) {
-  const s = createRun({ seed, bundle, character: "IRONCLAD", ascension });
-  const { ctx } = makeTestCtx(s, bundle);
+function ctxFor(seed: string, ascension = 0, content = bundle) {
+  const s = createRun({ seed, bundle: content, character: "IRONCLAD", ascension });
+  const { ctx } = makeTestCtx(s, content);
   return { s, ctx };
 }
 
-function finishThiefCombatRewards(
+function finishThiefCombat(
   seed: string,
   thieves: { id: "LOOTER" | "MUGGER"; stolenGold: number; escaped: boolean }[],
-): RewardEntry[] {
+  mutate?: (run: GameState["run"]) => void,
+): { entries: RewardEntry[]; before: GameState["rng"]; after: GameState["rng"]; run: GameState["run"] } {
   const s = createRun({ seed, bundle, character: "IRONCLAD" });
+  mutate?.(s.run);
   const character = bundle.characters.get(s.run.character)!;
   const combat = buildCombatState(
     s.run,
@@ -53,14 +68,52 @@ function finishThiefCombatRewards(
   s.combat = combat;
   s.run.room = { kind: "combat", roomKind: "monster", encounterId: combat.combatFlags.encounterId, burningElite: false };
   const { ctx, registry } = makeTestCtx(s, bundle);
+  const before = registry.saveState();
   handleCombatVictory(s, ctx, registry);
   const room = (s.run as { room: RoomState | null }).room;
   if (room?.kind !== "rewards") throw new Error("expected rewards room");
-  return room.entries;
+  return { entries: room.entries, before, after: registry.saveState(), run: s.run };
+}
+
+function finishThiefCombatRewards(
+  seed: string,
+  thieves: { id: "LOOTER" | "MUGGER"; stolenGold: number; escaped: boolean }[],
+  mutate?: (run: GameState["run"]) => void,
+): RewardEntry[] {
+  return finishThiefCombat(seed, thieves, mutate).entries;
 }
 
 function goldRewardAmounts(entries: RewardEntry[]): number[] {
   return entries.flatMap((e) => e.kind === "gold" ? [e.amount] : []);
+}
+
+type TestCtx = ReturnType<typeof ctxFor>["ctx"];
+
+/** Independent replay of AbstractDungeon.getRewardCards (AbstractDungeon.java:
+ *  1981-2064) on a copy of cardRng: every card's rarity roll (always drawn,
+ *  boss included) and pick, THEN one randomBoolean(cardUpgradedChance) per
+ *  non-rare card. Returns what the engine must produce. */
+function replayJavaCardReward(ctx: TestCtx, room: "monster" | "elite" | "boss") {
+  const rng = Rng.fromState(ctx.rng("cardRng").saveState());
+  let factor = ctx.run.blizzard.cardRarityFactor;
+  const [rare, uncommon] = room === "elite" ? [10, 40] : [3, 37];
+  const picks: { id: string; rarity: "common" | "uncommon" | "rare" }[] = [];
+  for (let i = 0; i < 3; i++) {
+    const roll = rng.random(99) + factor;
+    const rarity = room === "boss" || roll < rare ? "rare" : roll < rare + uncommon ? "uncommon" : "common";
+    if (rarity === "rare") factor = 5;
+    else if (rarity === "common") factor = Math.max(factor - 1, -40);
+    const pool = classCardPool(ctx, rarity);
+    let id: string;
+    do id = pool[rng.random(pool.length - 1)]!;
+    while (picks.some((p) => p.id === id));
+    picks.push({ id, rarity });
+  }
+  const act = ctx.run.act;
+  const asc = ctx.run.ascension;
+  const chance = act <= 1 ? 0 : act === 2 ? (asc >= 12 ? 0.125 : 0.25) : asc >= 12 ? 0.25 : 0.5;
+  const cards = picks.map((p) => ({ ...p, upgraded: p.rarity !== "rare" && rng.randomBoolean(chance) }));
+  return { cards, counter: rng.counter, factor };
 }
 
 describe("card reward pity (cardRarityFactor)", () => {
@@ -74,8 +127,8 @@ describe("card reward pity (cardRarityFactor)", () => {
       rarities.push(cards.map((c) => c.rarity));
       factors.push(s.run.blizzard.cardRarityFactor);
     }
-    expect(factors).toEqual([3, 2, 0, -3, -3, -6, 5, 3, 2, 0]);
-    expect(rarities[6]![0]).toBe("rare"); // the reset point
+    expect(factors).toEqual([3, 1, -2, -3, 5, 3, 1, 0, -2, 3]);
+    expect(rarities[4]).toContain("rare"); // the reset point
     // replay the update rule from the observed rarities
     let f = 5;
     const replayed: number[] = [];
@@ -124,12 +177,46 @@ describe("card reward pity (cardRarityFactor)", () => {
     expect(s.run.blizzard.cardRarityFactor).toBe(60);
   });
 
-  test("boss rewards are always rare (no rarity roll) and reset the factor", () => {
+  test("boss rewards are always rare, the rarity roll is still consumed, and the factor resets", () => {
+    // rollRarity: "int roll = cardRng.random(99);" then MonsterRoomBoss.getCardRarity -> RARE
     const { s, ctx } = ctxFor("BOSSR");
     s.run.blizzard.cardRarityFactor = -12;
+    const expected = replayJavaCardReward(ctx, "boss");
     const cards = createCardReward(ctx, "boss");
     expect(cards.every((c) => c.rarity === "rare")).toBe(true);
     expect(s.run.blizzard.cardRarityFactor).toBe(5);
+    expect(cards).toEqual(expected.cards);
+    expect(ctx.rng("cardRng").counter).toBe(expected.counter);
+  });
+
+  test("the reward matches getRewardCards call for call: picks first, then one upgrade roll per non-rare", () => {
+    for (const [act, asc] of [
+      [1, 0],
+      [2, 0],
+      [2, 12],
+      [3, 0],
+      [3, 12],
+    ] as const) {
+      for (let i = 0; i < 12; i++) {
+        const { s, ctx } = ctxFor(`JAVACARDS${act}-${asc}-${i}`, asc);
+        s.run.act = act;
+        for (const room of ["monster", "elite", "boss"] as const) {
+          const expected = replayJavaCardReward(ctx, room);
+          expect(createCardReward(ctx, room)).toEqual(expected.cards);
+          expect(ctx.rng("cardRng").counter).toBe(expected.counter);
+          expect(s.run.blizzard.cardRarityFactor).toBe(expected.factor);
+        }
+      }
+    }
+  });
+
+  test("act 1 still burns one upgrade roll per non-rare card (chance 0)", () => {
+    const { ctx } = ctxFor("UPGBURN");
+    const before = ctx.rng("cardRng").counter;
+    const cards = createCardReward(ctx, "monster");
+    const nonRare = cards.filter((c) => c.rarity !== "rare").length;
+    expect(ctx.rng("cardRng").counter - before).toBeGreaterThanOrEqual(3 + 3 + nonRare);
+    expect(cards.every((c) => !c.upgraded)).toBe(true);
   });
 
   test("3 cards, duplicate-free within one reward", () => {
@@ -218,32 +305,41 @@ describe("potion drop pity", () => {
     expect([...seen].sort()).toEqual(["common", "rare", "uncommon"]);
   });
 
-  test("Sozu suppresses potion reward rolls without advancing pity or potion RNG", () => {
-    const { s, ctx } = ctxFor("SOZU-POTION-REWARD");
-    s.run.relics.push({ defId: "SOZU", counter: 0 });
-    s.run.blizzard.potionChance = 60;
-    const counter = ctx.rng("potionRng").counter;
-    expect(rollPotionReward(ctx, 1)).toBeNull();
-    expect(s.run.blizzard.potionChance).toBe(60);
-    expect(ctx.rng("potionRng").counter).toBe(counter);
+  test("Sozu does not stop the potion reward roll: it rolls, moves pity, and lands on the screen", () => {
+    // AbstractRoom.addPotionToRewards has no Sozu check (AbstractRoom.java:780-815)
+    const plain = ctxFor("SOZU-POTION-REWARD");
+    const sozu = ctxFor("SOZU-POTION-REWARD");
+    sozu.s.run.relics.push({ defId: "SOZU", counter: 0 });
+    for (const c of [plain, sozu]) c.s.run.blizzard.potionChance = 60;
+    const expected = rollPotionReward(plain.ctx, 1);
+    expect(expected).not.toBeNull();
+    expect(rollPotionReward(sozu.ctx, 1)).toBe(expected);
+    expect(sozu.s.run.blizzard.potionChance).toBe(50);
+    expect(sozu.ctx.rng("potionRng").counter).toBe(plain.ctx.rng("potionRng").counter);
   });
 
-  test("Sozu suppresses random potion sources and shop potion slots", () => {
+  test("Sozu leaves random potion rolls and shop potion stock in place", () => {
+    // ShopScreen.initPotions has no Sozu check; StorePotion.purchasePotion refuses the sale
     const { s, ctx } = ctxFor("SOZU-RANDOM-POTION");
     s.run.relics.push({ defId: "SOZU", counter: 0 });
-    expect(returnRandomPotion(ctx)).toBeNull();
-    expect(generateShop(ctx).potions).toHaveLength(0);
+    expect(returnRandomPotion(ctx)).not.toBeNull();
+    expect(generateShop(ctx).potions).toHaveLength(3);
   });
 
-  test("Sozu prevents taking or buying pre-existing potion entries", () => {
+  test("Sozu: a potion reward is used up with no potion; a shop potion cannot be bought", () => {
+    // RewardItem.claimReward: "if(hasRelic("Sozu")) { flash(); return true; }"
     const reward = ctxFor("SOZU-TAKE-POTION");
     reward.s.run.relics.push({ defId: "SOZU", counter: 0 });
+    reward.s.run.potions = ["T_POT_C_A", "T_POT_C_A", "T_POT_C_A"]; // even with a full belt
     reward.s.run.room = {
       kind: "rewards",
       source: "event",
-      entries: [{ kind: "potion", id: "T_POT_C_A", taken: false }],
+      entries: [{ kind: "potion", id: "T_POT_U_A", taken: false }],
     };
-    expect(() => advance(reward.s, { cmd: "takeReward", i: 0 }, bundle)).toThrow("a relic prevents obtaining potions");
+    const took = advance(reward.s, { cmd: "takeReward", i: 0 }, bundle);
+    if (took.run.room?.kind !== "rewards") throw new Error("expected rewards");
+    expect(took.run.room.entries[0]!.taken).toBe(true);
+    expect(took.run.potions).toEqual(["T_POT_C_A", "T_POT_C_A", "T_POT_C_A"]);
 
     const shop = ctxFor("SOZU-BUY-POTION");
     shop.s.run.relics.push({ defId: "SOZU", counter: 0 });
@@ -304,11 +400,34 @@ describe("gold rewards", () => {
     expect(amounts).toHaveLength(2);
   });
 
-  test("escaped Looter does not refund stolen gold", () => {
-    const entries = finishThiefCombatRewards("THIEF-ESCAPED", [{ id: "LOOTER", stolenGold: 30, escaped: true }]);
-    const amounts = goldRewardAmounts(entries);
-    expect(amounts).not.toContain(30);
-    expect(amounts).toHaveLength(1);
+  test("a hallway fight whose every monster escaped pays no gold and has potion chance 0", () => {
+    // AbstractRoom.java:457 "(this instanceof MonsterRoom) && !haveMonstersEscaped()"
+    // gates the gold; AbstractRoom.java:783-795 leaves the potion chance at 0,
+    // but "potionRng.random(0, 99) < chance" is still rolled (pity +10)
+    const r = finishThiefCombat("THIEF-ESCAPED", [{ id: "LOOTER", stolenGold: 30, escaped: true }], (run) => {
+      run.blizzard.potionChance = 60; // would guarantee a drop if the chance applied
+    });
+    expect(goldRewardAmounts(r.entries)).toEqual([]);
+    expect(r.entries.some((e) => e.kind === "potion")).toBe(false);
+    expect(r.entries.filter((e) => e.kind === "card").length).toBe(3); // mugged: the card reward stays
+    expect(r.after.run.treasureRng.counter).toBe(r.before.run.treasureRng.counter);
+    expect(r.after.run.potionRng.counter).toBe(r.before.run.potionRng.counter + 1);
+    expect(r.run.blizzard.potionChance).toBe(70);
+  });
+
+  test("escaped fight: White Beast Statue still forces the potion", () => {
+    const entries = finishThiefCombatRewards(
+      "THIEF-ESCAPED-WBS",
+      [{ id: "LOOTER", stolenGold: 30, escaped: true }],
+      (run) => run.relics.push({ defId: "WHITE_BEAST_STATUE", counter: 0 }),
+    );
+    expect(entries.some((e) => e.kind === "potion")).toBe(true);
+  });
+
+  test("stolen gold is listed before the battle's own gold (Looter.die adds it mid-fight)", () => {
+    const entries = finishThiefCombatRewards("THIEF-ORDER", [{ id: "LOOTER", stolenGold: 30, escaped: false }]);
+    expect(entries[0]).toEqual({ kind: "gold", amount: 30, taken: false });
+    expect(entries[1]!.kind).toBe("gold");
   });
 
   test("multiple killed thieves combine into one stolen gold reward", () => {
@@ -341,6 +460,35 @@ describe("elite rewards", () => {
     s.run.keys.emerald = true;
     const entries = buildCombatRewards(ctx, "elite", true);
     expect(entries.some((e) => e.kind === "emeraldKey")).toBe(false);
+  });
+
+  test("Black Star: a second elite relic off its own tier roll, never a campfire relic", () => {
+    // MonsterRoomElite.dropReward: "addNoncampRelicToRewards(returnRandomRelicTier())"
+    const { s, ctx } = ctxFor("BLACKSTAR");
+    s.run.relics.push({ defId: "BLACK_STAR", counter: 0 });
+    s.run.pools.commonRelics = ["PEACE_PIPE", "SHOVEL", "C1", "C2", "C3"];
+    s.run.pools.uncommonRelics = ["GIRYA", "U1", "U2"];
+    s.run.pools.rareRelics = ["R1", "R2"];
+    const relicRng = ctx.rng("relicRng").counter;
+    const entries = buildCombatRewards(ctx, "elite", false);
+    const relics = entries.flatMap((e) => (e.kind === "relic" ? [e.id] : []));
+    expect(relics).toHaveLength(2);
+    expect(ctx.rng("relicRng").counter).toBe(relicRng + 2);
+    // the main relic is a plain front pop; the second skips (and burns) campfire relics
+    expect(["PEACE_PIPE", "SHOVEL", "GIRYA"]).not.toContain(relics[1]!);
+  });
+
+  test("the emerald key counts toward rewards.size() >= 4: Black Star + burning elite leaves no potion", () => {
+    // gold, relic, Black Star relic, emerald key = 4 RewardItems before addPotionToRewards
+    const { s, ctx } = ctxFor("BLACKSTARKEY");
+    s.run.relics.push({ defId: "BLACK_STAR", counter: 0 });
+    s.run.blizzard.potionChance = 60;
+    const potionRng = ctx.rng("potionRng").counter;
+    const entries = buildCombatRewards(ctx, "elite", true);
+    expect(entries.some((e) => e.kind === "emeraldKey")).toBe(true);
+    expect(entries.some((e) => e.kind === "potion")).toBe(false);
+    expect(ctx.rng("potionRng").counter).toBe(potionRng + 1); // rolled at chance 0
+    expect(s.run.blizzard.potionChance).toBe(70);
   });
 });
 
@@ -514,7 +662,8 @@ describe("shop", () => {
     expect(computeRemovalCost(ctx)).toBe(150);
   });
 
-  test("A16 (disputed; wiki side): every price is round(1.1x) of the A15 shop", () => {
+  test("A16: every item price is round(1.1x) of the A15 shop; the removal cost is untouched", () => {
+    // ShopScreen.init "applyDiscount(1.1F, false)" - affectPurge false
     const a15 = ctxFor("A16", 15);
     const a16 = ctxFor("A16", 16);
     const shop15 = generateShop(a15.ctx);
@@ -524,7 +673,98 @@ describe("shop", () => {
     for (let i = 0; i < shop15.potions.length; i++) {
       expect(shop16.potions[i]!.price).toBe(Math.round(shop15.potions[i]!.price * 1.1));
     }
-    expect(shop16.removalCost).toBe(Math.round(shop15.removalCost * 1.1));
+    expect(shop16.removalCost).toBe(75);
+    expect(shop15.removalCost).toBe(75);
+  });
+
+  test("relics come off the END of the rolled pool, each tier roll followed by its own price roll", () => {
+    // ShopScreen.initRelics: returnRandomRelicEnd(rollRelicTier()) then
+    // round(price * merchantRng.random(0.95F, 1.05F)), slot by slot
+    for (const seed of ["RELEND1", "RELEND2", "RELEND3", "RELEND4"]) {
+      const { s, ctx } = ctxFor(seed);
+      const pools = structuredClone(s.run.pools);
+      const merchant = Rng.fromState(ctx.rng("merchantRng").saveState());
+      const shop = generateShop(ctx);
+      for (let i = 0; i < 7; i++) merchant.randomFloatRange(0.9, 1.1); // card prices
+      merchant.random(4); // sale slot
+      const keyOf = { common: "commonRelics", uncommon: "uncommonRelics", rare: "rareRelics", shop: "shopRelics" } as const;
+      for (let i = 0; i < 3; i++) {
+        let tier: "common" | "uncommon" | "rare" | "shop" = "shop";
+        if (i !== 2) {
+          const roll = merchant.random(99);
+          tier = roll < 48 ? "common" : roll < 82 ? "uncommon" : "rare";
+        }
+        expect(shop.relics[i]!.tier).toBe(tier);
+        expect(shop.relics[i]!.id).toBe(pools[keyOf[tier]].pop()!);
+        const base = SHOP.basePrices.relicByTier[tier];
+        expect(shop.relics[i]!.price).toBe(Math.round(f32mul(base, merchant.randomFloatRange(0.95, 1.05))));
+      }
+    }
+  });
+
+  test("relics that cannot spawn in a ShopRoom are popped, thrown away and replaced", () => {
+    // Courier/MawBank/OldCoin/SmilingMask.canSpawn: "!(getCurrRoom() instanceof ShopRoom)"
+    const { s, ctx } = ctxFor("NOTINSHOP", 0, notInShopBundle);
+    s.run.pools.commonRelics = ["C1", "MAW_BANK"];
+    s.run.pools.uncommonRelics = ["U1", "THE_COURIER"];
+    s.run.pools.rareRelics = ["R1", "OLD_COIN"];
+    s.run.pools.shopRelics = ["S1", "SMILING_MASK"];
+    const shop = generateShop(ctx);
+    const ids = shop.relics.map((r) => r.id);
+    for (const banned of ["THE_COURIER", "MAW_BANK", "OLD_COIN", "SMILING_MASK"]) expect(ids).not.toContain(banned);
+    for (const id of ids.slice(0, 2)) expect(["C1", "U1", "R1", "CIRCLET"]).toContain(id);
+    // the shop slot popped SMILING_MASK off the end, threw it away, then took S1
+    expect(ids[2]).toBe("S1");
+    expect(s.run.pools.shopRelics).toEqual([]);
+  });
+
+  test("The Courier and Membership Card each round in turn; removal takes Membership's 0.5 of the base", () => {
+    // ShopScreen.init: applyDiscount(0.8F, true) then applyDiscount(0.5F, true)
+    const plain = ctxFor("DISCOUNTS");
+    const both = ctxFor("DISCOUNTS", 0, courierMembershipBundle);
+    both.s.run.relics.push({ defId: "THE_COURIER", counter: 0 }, { defId: "MEMBERSHIP_CARD", counter: 0 });
+    const a = generateShop(plain.ctx);
+    const b = generateShop(both.ctx);
+    const chain = (p: number) => Math.round(Math.round(f32mul(p, 0.8)) * 0.5);
+    for (let i = 0; i < 7; i++) expect(b.cards[i]!.price).toBe(chain(a.cards[i]!.price));
+    for (let i = 0; i < 3; i++) expect(b.relics[i]!.price).toBe(chain(a.relics[i]!.price));
+    for (let i = 0; i < 3; i++) expect(b.potions[i]!.price).toBe(chain(a.potions[i]!.price));
+    expect(b.removalCost).toBe(Math.round(75 * 0.5)); // 38, not round(round(75 * 0.8) * 0.5) = 30
+
+    const courierOnly = ctxFor("DISCOUNTS", 0, courierMembershipBundle);
+    courierOnly.s.run.relics.push({ defId: "THE_COURIER", counter: 0 });
+    courierOnly.s.run.history.cardRemovesPurchased = 1;
+    expect(generateShop(courierOnly.ctx).removalCost).toBe(80);
+  });
+
+  test("buying Membership Card halves what is left and resets removal from the base cost", () => {
+    // StoreRelic.purchaseRelic: "if(relic.relicId.equals("Membership Card")) shopScreen.applyDiscount(0.5F, true)"
+    const { s, ctx } = ctxFor("BUYMEMBER", 0, courierMembershipBundle);
+    s.run.relics.push({ defId: "THE_COURIER", counter: 0 });
+    const shop = generateShop(ctx);
+    expect(shop.removalCost).toBe(60);
+    shop.relics[0] = { id: "MEMBERSHIP_CARD", tier: "shop", price: 1, sold: false };
+    s.run.room = { kind: "shop", shop };
+    s.run.gold = 5000;
+    const cardsBefore = shop.cards.map((c) => c.price);
+    const after = advance(s, { cmd: "shopBuy", kind: "relic", idx: 0 }, courierMembershipBundle);
+    if (after.run.room?.kind !== "shop") throw new Error("expected shop");
+    expect(after.run.room.shop.cards.map((c) => c.price)).toEqual(cardsBefore.map((p) => Math.round(p * 0.5)));
+    expect(after.run.room.shop.removalCost).toBe(38); // round(75 * 0.5), not round(60 * 0.5)
+  });
+
+  test("buying Smiling Mask pins the removal cost at 50 on the spot", () => {
+    // StoreRelic.purchaseRelic: "if(relic.relicId.equals("Smiling Mask")) ShopScreen.actualPurgeCost = 50"
+    const { s, ctx } = ctxFor("BUYMASK");
+    s.run.history.cardRemovesPurchased = 3;
+    const shop = generateShop(ctx);
+    expect(shop.removalCost).toBe(150);
+    shop.relics[0] = { id: "SMILING_MASK", tier: "common", price: 1, sold: false };
+    s.run.room = { kind: "shop", shop };
+    s.run.gold = 5000;
+    const after = advance(s, { cmd: "shopBuy", kind: "relic", idx: 0 }, bundle);
+    if (after.run.room?.kind !== "shop") throw new Error("expected shop");
+    expect(after.run.room.shop.removalCost).toBe(50);
   });
 
   test("same seed generates an identical shop", () => {

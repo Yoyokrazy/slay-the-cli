@@ -169,8 +169,9 @@ describe("act 3 boss gating", () => {
 
 describe("burning elite buff", () => {
   test("buffed elite carries the rolled buff values (exact table)", () => {
+    // MonsterRoomElite.java:58 "new StrengthPower(m, AbstractDungeon.actNum + 1)"
     let s = enterBurningElite(0);
-    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "STRENGTH")?.amount).toBe(1);
+    expect(s.combat!.monsters[0]!.powers.find((p) => p.id === "STRENGTH")?.amount).toBe(2);
 
     s = enterBurningElite(1);
     expect(s.combat!.monsters[0]!.maxHp).toBe(25);

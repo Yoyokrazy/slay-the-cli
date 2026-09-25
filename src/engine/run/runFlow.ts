@@ -35,6 +35,7 @@ import {
   nextRewardGroup,
   obtainRelicFromPool,
   rollGoldReward,
+  rollPotionReward,
 } from "./rewards";
 import { generateShop, repriceAfterRelic, restockShopCardSlot, restockShopRelicSlot, restockShopPotionSlot } from "./shop";
 import { setupTreasureRoom, openChestContents, claimChestRelic, claimChestSapphireKey } from "./treasure";
@@ -378,8 +379,10 @@ function resolveCombatMonsters(
 }
 
 /**
- * Burning ("emerald") elite buff, exact per the reference:
- *   0: +Strength(act)  1: +25% max HP (rounded)  2: Metallicize(act*2+2)  3: Regenerate(act*2+1)
+ * Burning ("emerald") elite buff, MonsterRoomElite.applyEmeraldEliteBuff
+ * (MonsterRoomElite.java:48-80), mapRng.random(0, 3):
+ *   0: Strength(actNum + 1)  1: +25% max HP (rounded)  2: Metallicize(act*2+2)
+ *   3: Regenerate(act*2+1)
  */
 function applyBurningEliteBuff(ctx: EffectCtx, buff: number, act: number): void {
   if (buff < 0 || !ctx.combat) return;
@@ -387,7 +390,7 @@ function applyBurningEliteBuff(ctx: EffectCtx, buff: number, act: number): void 
     if (m.isDead || m.isEscaped) continue;
     switch (buff) {
       case 0:
-        applyBurningElitePower(ctx, m, "STRENGTH", act);
+        applyBurningElitePower(ctx, m, "STRENGTH", act + 1);
         break;
       case 1: {
         const inc = Math.round(m.maxHp * 0.25);
@@ -515,12 +518,13 @@ function actTransition(state: GameState, ctx: EffectCtx, registry: RngRegistry):
   run.blizzard.shopChance = UNKNOWN_ROOM.base.shop;
   run.blizzard.treasureChance = UNKNOWN_ROOM.base.treasure;
 
-  // cardRng counter JUMP (meta.rngStreams.cardRngActTransitionCounterJump):
-  // advance to the next 250-boundary by replaying randomBoolean()
+  // cardRng counter JUMP (dungeonTransitionSetup, AbstractDungeon.java:3378-
+  // 3385): "if(cardRng.counter > 0 && cardRng.counter < 250) setCounter(250)",
+  // then (250, 500) -> 500 and (500, 750) -> 750; an exact boundary stays put
   const cardRng = registry.get("cardRng");
-  if (cardRng.counter < 250) cardRng.setCounter(250);
-  else if (cardRng.counter < 500) cardRng.setCounter(500);
-  else if (cardRng.counter < 750) cardRng.setCounter(750);
+  if (cardRng.counter > 0 && cardRng.counter < 250) cardRng.setCounter(250);
+  else if (cardRng.counter > 250 && cardRng.counter < 500) cardRng.setCounter(500);
+  else if (cardRng.counter > 500 && cardRng.counter < 750) cardRng.setCounter(750);
 
   if (run.act === 4) {
     // fixed Act 4: no encounter/event pools, no generated map
@@ -581,11 +585,26 @@ function markGroupTaken(entries: RewardEntry[], group: number): void {
 }
 
 /**
- * Smoke Bomb: the player walks out of a non-boss fight. The room is spent (it
- * is not fought again) but nothing is earned - no rewards screen, no gold, and
- * the combat/elite tallies stay put because nothing was actually killed.
+ * Smoke Bomb: the player walks out of a non-boss fight (SmokeBomb.use sets
+ * smoked, then AbstractPlayer's escape timer calls AbstractRoom.endBattle).
+ * endBattle still runs Meat on the Bone's onTrigger and then player.onVictory
+ * (Burning Blood), the same onVictoryFirst -> onVictory pair as a won fight, and
+ * AbstractRoom.update still adds the room's gold, dropReward() and
+ * addPotionToRewards(), consuming their rng and relic pops, but
+ * openCombat(TEXT[1], true) never shows them and rolls no card reward: nothing
+ * is earned. The room is spent (it is not fought again) and the combat/elite
+ * tallies stay put because nothing was actually killed.
  */
 export function handleCombatEscape(state: GameState, ctx: EffectCtx): void {
+  const room = state.run.room;
+  if (room?.kind === "combat" && ctx.combat) {
+    fireHook(ctx, PLAYER, "onVictoryFirst");
+    fireHook(ctx, PLAYER, "onVictory");
+    // ENGINE-GAP: an event fight's own pre-combat rewards (addGoldToRewards,
+    // relics) are not counted toward "rewards.size() >= 4" here
+    if (room.eventCombat) rollPotionReward(ctx, 0);
+    else buildCombatRewards(ctx, room.roomKind, room.burningElite, { smoked: true });
+  }
   state.combat = null;
   ctx.combat = null;
   if (state.run.room?.kind === "combat") state.run.room = { kind: "map" };
@@ -803,7 +822,12 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
           e.taken = true;
           break;
         case "potion": {
-          if (!canObtainPotions(run)) throw new Error("a relic prevents obtaining potions");
+          // RewardItem.claimReward: Sozu flashes and the reward is used up
+          // with no potion ("return true"), full belt or not
+          if (!canObtainPotions(run)) {
+            e.taken = true;
+            break;
+          }
           const slot = run.potions.indexOf(null);
           if (slot === -1) throw new Error("potion slots are full");
           run.potions[slot] = e.id;
@@ -865,10 +889,13 @@ export function handleRunCommand(state: GameState, ctx: EffectCtx, registry: Rng
         run.gold -= slot.price;
         slot.sold = true;
         addRelic(ctx, boughtRelicId);
-        // StoreRelic.purchaseRelic: Membership Card's applyDiscount runs
-        // before the Courier restock, whose new slot is priced on its own
+        // StoreRelic.purchaseRelic: Membership Card / Smiling Mask re-price the
+        // shop first, then the slot restocks, the new slot priced on its own -
+        // buying The Courier itself restocks its own slot
+        // ("relic.relicId.equals("The Courier") ||
+        // AbstractDungeon.player.hasRelic("The Courier")")
         repriceAfterRelic(ctx, shop, boughtRelicId);
-        if (courierRestock) restockShopRelicSlot(ctx, slot);
+        if (hasRelic(run, "THE_COURIER")) restockShopRelicSlot(ctx, slot);
       } else {
         const slot = shop.potions[cmd.idx];
         if (!slot || slot.sold) throw new Error("potion slot unavailable");

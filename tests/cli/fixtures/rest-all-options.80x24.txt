@@ -1,8 +1,8 @@
- HP 63/80 | G 199 | F6 A1 | ASC0 | K:--- | POT WPL | DECK 10 | REL 4 | Ironclad 
+ HP 62/80 | G 199 | F6 A1 | ASC0 | K:--- | POT WPL | DECK 10 | REL 4 | Ironclad 
 -- REST SITE -------------------------------------------------------------------
                                                                                 
   [1] Rest                                                                      
-        Heal 17 HP                                                              
+        Heal 18 HP                                                              
   [2] Smith                                                                     
         Upgrade a card                                                          
   [3] Recall                                                                    

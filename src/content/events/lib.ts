@@ -22,7 +22,9 @@ import { f32mul } from "../../engine/core/math";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
 import { obtainDeckCard, removeDeckCards as removeMasterDeckCards, transformDeckCard as transformMasterDeckCard } from "../../engine/run/deck";
 import {
+  canObtainPotions,
   cardGroupEntries,
+  cardRewardSize,
   classCardPool,
   colorlessCardPool,
   combatRelicTier,
@@ -31,11 +33,11 @@ import {
   nextRewardGroup,
   obtainRelicFromPool,
   returnRandomPotion,
-  rollCardRarity,
   rollPotionReward,
-  upgradeChance,
   withGoldenIdolBonus,
   CARD_REWARD,
+  COLORLESS_RARE_CHANCE,
+  type RewardRoomKind,
   type RolledCard,
 } from "../../engine/run/rewards";
 import { canSmith } from "../../engine/run/rest";
@@ -226,22 +228,20 @@ export function colorlessViaShuffle(ctx: EffectCtx, rarity: "uncommon" | "rare")
   return null;
 }
 
-/** One colorless card reward (Sensory Stone): mirrors createCardReward - event
- *  rarity roll + pity updates, COMMON promoted to UNCOMMON (no common colorless
- *  exists), dupe reroll, act-based upgrade roll for non-rares. Corpus pins the
- *  stream (cardRng); pity/upgrade participation follows the standard reward path. */
+/** One colorless card reward (Sensory Stone's RewardItem(CardColor.COLORLESS)):
+ *  getColorlessRewardCards (AbstractDungeon.java:1934-1978). Sized like any card
+ *  reward (Question Card / Busted Crown); each card rolls
+ *  rollRareOrUncommon(colorlessRareChance) = cardRng.randomBoolean(0.3), a RARE
+ *  resets cardBlizzRandomizer to its start offset (commons never happen, so the
+ *  pity never decrements), then a cardRng pick with dupe reroll. No upgrade roll. */
 export function createColorlessCardReward(ctx: EffectCtx): RolledCard[] {
   const run = ctx.run;
   const cardRng = ctx.rng("cardRng");
-  const chance = upgradeChance(run.act, run.ascension);
   const out: RolledCard[] = [];
-  for (let i = 0; i < 3; i++) {
-    let rarity = rollCardRarity(ctx, "event");
+  const numCards = cardRewardSize(run);
+  for (let i = 0; i < numCards; i++) {
+    const rarity = cardRng.randomBoolean(COLORLESS_RARE_CHANCE) ? "rare" : "uncommon";
     if (rarity === "rare") run.blizzard.cardRarityFactor = CARD_REWARD.pityInitial;
-    else if (rarity === "common") {
-      run.blizzard.cardRarityFactor = Math.max(run.blizzard.cardRarityFactor - 1, CARD_REWARD.pityFloor);
-    }
-    if (rarity === "common") rarity = "uncommon";
     const pool = colorlessCardPool(ctx, rarity);
     if (pool.length === 0) throw new Error(`empty colorless ${rarity} pool`);
     let id: CardId;
@@ -249,8 +249,7 @@ export function createColorlessCardReward(ctx: EffectCtx): RolledCard[] {
     do {
       id = pool[cardRng.random(pool.length - 1)]!;
     } while (out.some((c) => c.id === id) && ++guard < 1000);
-    const upgraded = rarity !== "rare" && chance > 0 && cardRng.randomBoolean(chance);
-    out.push({ id, rarity, upgraded });
+    out.push({ id, rarity, upgraded: false });
   }
   return out;
 }
@@ -296,8 +295,10 @@ export function screenlessRandomRelic(ctx: EffectCtx): RelicId {
 
 // --- potions -------------------------------------------------------------------------
 
-/** Grant a rolled potion directly; lost when the belt is full (Knowing Skull). */
+/** Grant a rolled potion directly; lost when the belt is full (Knowing Skull).
+ *  KnowingSkull.java:226-234 checks Sozu itself, before any roll. */
 export function grantPotionDirect(ctx: EffectCtx): PotionId | null {
+  if (!canObtainPotions(ctx.run)) return null;
   const id = returnRandomPotion(ctx);
   if (id) {
     const slot = ctx.run.potions.indexOf(null);
@@ -313,14 +314,19 @@ export function openRewards(ctx: EffectCtx, entries: RewardEntry[]): void {
 }
 
 /** Assemble an event-combat rewards screen in the standard order
- *  (gold -> relics -> potion roll -> card group), same as buildCombatRewards. */
+ *  (gold -> relics -> potion roll -> card group), same as buildCombatRewards.
+ *  The gold is the event's addGoldToRewards total, so the RewardItem's Golden
+ *  Idol bonus applies (RewardItem.java:160-163: every gold reward outside a
+ *  TreasureRoom). The fight happens in the EventRoom, so its card reward rolls
+ *  the plain 3/37 rarity even for elite fights (eliteTrigger only feeds
+ *  relics): `cardRoom` is "event" there. */
 export function eventCombatRewards(
   ctx: EffectCtx,
   opts: {
     gold?: number;
     relics?: RelicId[];
     potionRoll?: boolean;
-    cardRoom?: "monster" | "elite";
+    cardRoom?: RewardRoomKind;
     extraCardGroups?: RolledCard[][];
   },
 ): RewardEntry[] {

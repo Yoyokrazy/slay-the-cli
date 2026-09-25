@@ -3,17 +3,17 @@
  RELICS Bur  POTIONS [F] [E] [B]                                                                                 [l] log
                                                                                                                         
                           +--------------------------------------------+ +--------------------------------------------+ 
-                          | /! 6  Bite                             [1] | | v Weak 2  Spit Web                     [2] | 
+                          | /! 7  Bite                             [1] | | v Weak 2  Spit Web                     [2] | 
                           |                 **++*                      | |                                            | 
                           |                *==---=+=                   | |                *++::--                     | 
                           |                ++==-===:-+                 | |                +==:::--:-                  | 
                           |                ++++-+++-++*                | |                ====:===:==*                | 
                           | Red Louse                                  | | Green Louse                                | 
-                          | 13/13 [##############]                     | | 13/13 [##############]                     | 
-                          | ^ Curl Up 5                                | | ^ Curl Up 7                                | 
+                          | 13/13 [##############]                     | | 11/11 [##############]                     | 
+                          | ^ Curl Up 3                                | | ^ Curl Up 7                                | 
                           +--------------------------------------------+ +--------------------------------------------+ 
                                                                                                                         
-                                            INCOMING 6    BLOCK 0    NET -6                                             
+                                            INCOMING 7    BLOCK 0    NET -7                                             
  +==( E 3/3 )=======================================+                                                                   
  | Ironclad                                         |                                                                   
  | HP 80/80 [####################]                  |                                                                   
@@ -31,6 +31,6 @@
  DRAW 5                                               [e] END TURN                                 DISCARD 0  EXHAUST 0 
 -- INFO ----------------------------------------------------------------------------------------------------------------
  ENEMY  Red Louse  HP 13/13                                                                                             
-   Bite: intends to attack for 6.                                                                                       
-   Curl Up 5: Gains 5 Block upon first receiving attack damage.                                                         
+   Bite: intends to attack for 7.                                                                                       
+   Curl Up 3: Gains 3 Block upon first receiving attack damage.                                                         
 [1-9] choose a target  [Esc] cancel                                                                                     

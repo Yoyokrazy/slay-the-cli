@@ -10,7 +10,7 @@ import { foldHook } from "../core/hooks";
 import { f32mul } from "../core/math";
 import type { Rng } from "../core/rng";
 import type { RolledCard } from "./rewards";
-import { classCardPool, colorlessCardPool, cursePool, returnRandomPotion, obtainRelicFromPool } from "./rewards";
+import { canObtainPotions, classCardPool, colorlessCardPool, cursePool, returnRandomPotion, obtainRelicFromPool } from "./rewards";
 import { obtainDeckCard } from "./deck";
 
 // --- tables (meta.neow; audited by tests/audit/metaAudit.test.ts) -------------------
@@ -223,7 +223,7 @@ export function applyNeowBonus(ctx: EffectCtx, bonus: NeowBonus): NeowFollowUp {
     case "THREE_SMALL_POTIONS": {
       for (let i = 0; i < NEOW_BONUS_VALUES.THREE_SMALL_POTIONS; i++) {
         const id: PotionId | null = returnRandomPotion(ctx);
-        if (id) {
+        if (id && canObtainPotions(run)) {
           const slot = run.potions.indexOf(null);
           if (slot !== -1) run.potions[slot] = id; // overflow potions are lost
         }

@@ -1,13 +1,14 @@
-// Blue & Red Slaver - exact ports from data/corpus/monsters-act1.json.
+// Blue & Red Slaver - exact ports from data/corpus/monsters-act1.json, checked
+// against SlaverBlue.java / SlaverRed.java.
 // CONFLICTS HONORED (wiki/real game over lightspeed):
 //  - Blue Slaver asc>=17: RAKE never twice in a row (lightspeed's OR-flattened
 //    expression made the asc17 clause dead code).
 //  - Red Slaver: usedEntangle IS set when Entangle is used (once per combat;
 //    lightspeed never writes the flag).
 //  - Red Slaver asc>=17: SCRAPE never twice in a row (same OR-flattening bug).
-// UNRESOLVED CONFLICT (kept lightspeed): post-entangle STAB branch threshold is
-// roll >= 50 (the wiki prose says 55%, i.e. roll >= 45; unresolvable without
-// the game jar - corpus does not adjudicate, so the transcribed 50 stands).
+//  - Red Slaver post-entangle STAB branch: SlaverRed.java:133 "if(num >= 55 &&
+//    usedEntangle && !lastTwoMoves((byte)1))" - roll >= 55 (45% STAB), not
+//    lightspeed's 50 nor the wiki prose's 55% STAB.
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { lastMove, lastTwoMovesWere } from "../../util";
@@ -74,7 +75,7 @@ export const redSlaver: MonsterDef = {
     if (self.moveHistory.length === 0) return "RED_SLAVER_STAB";
     const usedEntangle = self.data.usedEntangle === true;
     if (roll >= 75 && !usedEntangle) return "RED_SLAVER_ENTANGLE";
-    if (roll >= 50 && usedEntangle && !lastTwoMovesWere(self, "RED_SLAVER_STAB")) return "RED_SLAVER_STAB";
+    if (roll >= 55 && usedEntangle && !lastTwoMovesWere(self, "RED_SLAVER_STAB")) return "RED_SLAVER_STAB";
     const scrapeAllowed =
       ctx.asc >= 17 ? lastMove(self) !== "RED_SLAVER_SCRAPE" : !lastTwoMovesWere(self, "RED_SLAVER_SCRAPE");
     if (scrapeAllowed) return "RED_SLAVER_SCRAPE";

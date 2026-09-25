@@ -56,21 +56,23 @@ export const acidSlimeS: MonsterDef = {
   category: "normal",
   hp: (asc) => (asc >= 7 ? [9, 13] : [8, 12]),
   moves: {
+    // takeTurn chains LICK <-> TACKLE with setMove and never queues a
+    // RollMoveAction (AcidSlime_S.java:49-65): no aiRng after turn 1
     ACID_SLIME_S_LICK: {
       id: "ACID_SLIME_S_LICK",
       intent: "debuff",
+      chainsNextMove: true,
       execute: (ctx, self) => playerPower(ctx, self, "WEAK", 1),
     },
     ACID_SLIME_S_TACKLE: {
       id: "ACID_SLIME_S_TACKLE",
       intent: "attack",
+      chainsNextMove: true,
       execute: (ctx, self) => attackPlayer(ctx, self, ctx.asc >= 2 ? 4 : 3),
     },
   },
   getMove: (ctx, self, _roll) => {
     // Turn 1: asc>=17 always LICK, else 50/50 via aiRng.randomBoolean().
-    // ENGINE-GAP: the reference consumes no aiRng.random(99) after turn 1 (moves
-    // are chained in takeTurn); this engine's rollMove consumes one per turn.
     if (self.moveHistory.length === 0) {
       if (ctx.asc >= 17) return "ACID_SLIME_S_LICK";
       return ctx.rng("aiRng").randomBoolean() ? "ACID_SLIME_S_TACKLE" : "ACID_SLIME_S_LICK";
@@ -113,9 +115,11 @@ export const acidSlimeM: MonsterDef = {
     const SPIT = "ACID_SLIME_M_CORROSIVE_SPIT";
     const TACKLE = "ACID_SLIME_M_TACKLE";
     const LICK = "ACID_SLIME_M_LICK";
+    // the SPIT branch rerolls with the no-arg aiRng.randomBoolean()
+    // (AcidSlime_M.java:96,133), a different bit than randomBoolean(0.5F)
     if (ctx.asc >= 17) {
       if (roll < 40) {
-        if (lastTwoMovesWere(self, SPIT)) return ctx.rng("aiRng").randomBoolean(0.5) ? TACKLE : LICK;
+        if (lastTwoMovesWere(self, SPIT)) return ctx.rng("aiRng").randomBoolean() ? TACKLE : LICK;
         return SPIT;
       }
       if (roll < 80) {
@@ -126,7 +130,7 @@ export const acidSlimeM: MonsterDef = {
       return LICK;
     }
     if (roll < 30) {
-      if (lastTwoMovesWere(self, SPIT)) return ctx.rng("aiRng").randomBoolean(0.5) ? TACKLE : LICK;
+      if (lastTwoMovesWere(self, SPIT)) return ctx.rng("aiRng").randomBoolean() ? TACKLE : LICK;
       return SPIT;
     }
     if (roll < 70) {
@@ -192,7 +196,8 @@ export const acidSlimeL: MonsterDef = {
       return LICK;
     }
     if (roll < 30) {
-      if (lastTwoMovesWere(self, SPIT)) return ctx.rng("aiRng").randomBoolean(0.5) ? TACKLE : LICK;
+      // no-arg aiRng.randomBoolean() here (AcidSlime_L.java:171)
+      if (lastTwoMovesWere(self, SPIT)) return ctx.rng("aiRng").randomBoolean() ? TACKLE : LICK;
       return SPIT;
     }
     if (roll < 70) {

@@ -165,7 +165,7 @@ const deadAdventurer: EventDef = {
     const remaining = d.rewards.slice(d.phase);
     const gold = ctx.rng("miscRng").randomRange(25, 35) + 30 * remaining.filter((r) => r === "GOLD").length;
     const relics = remaining.includes("RELIC") ? [screenlessRandomRelic(ctx)] : [];
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics, potionRoll: true, cardRoom: "elite" }));
+    openRewards(ctx, eventCombatRewards(ctx, { gold, relics, potionRoll: true, cardRoom: "event" }));
   },
 };
 

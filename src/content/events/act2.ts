@@ -1,7 +1,7 @@
 // Act 2 event pool (13 events) - data/corpus/events.json is the spec.
 
 import type { EventDef, EffectCtx } from "../../engine/content/defs";
-import { obtainRelicFromPool, POTION_DROP } from "../../engine/run/rewards";
+import { obtainRelicFromPool, rollPotionReward } from "../../engine/run/rewards";
 import { rollCardRarity, classCardPool } from "../../engine/run/rewards";
 import {
   a15,
@@ -160,8 +160,11 @@ const colosseum: EventDef = {
   },
   onCombatVictory: (ctx, encounterId, data) => {
     if (encounterId === "COLOSSEUM_EVENT_SLAVERS") {
-      // no reward screen; the potion pity still advances invisibly (corpus note)
-      ctx.run.blizzard.potionChance += POTION_DROP.pityStep;
+      // rewardAllowed = false only hides the screen: the room still runs
+      // addPotionToRewards (AbstractRoom.java:470-471, EventRoom branch), and
+      // the Nob bout's "rewards.clear()" (Colosseum.java:139) throws away
+      // whatever it dropped
+      rollPotionReward(ctx, 0);
       ctx.run.room = {
         kind: "event",
         eventId: "COLOSSEUM",
@@ -177,7 +180,7 @@ const colosseum: EventDef = {
         gold: 100,
         relics: [obtainRelicFromPool(ctx, "rare"), obtainRelicFromPool(ctx, "uncommon")],
         potionRoll: true,
-        cardRoom: "elite",
+        cardRoom: "event",
       }),
     );
   },
@@ -352,8 +355,9 @@ const maskedBandits: EventDef = {
   }),
   onCombatVictory: (ctx) => {
     const gold = ctx.rng("miscRng").randomRange(25, 35);
-    // no potion roll in the reference's reward list (corpus note)
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: ["RED_MASK"], cardRoom: "monster" }));
+    // the EventRoom still runs addPotionToRewards at the end of the fight
+    // (AbstractRoom.java:470-471, EventRoom branch: 40 + blizzardPotionMod)
+    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: ["RED_MASK"], potionRoll: true, cardRoom: "monster" }));
   },
 };
 

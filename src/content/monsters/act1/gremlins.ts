@@ -4,6 +4,9 @@
 // NOTE (MAD_GREMLIN): the corpus says ANGRY triggers even on fully blocked
 // attacks; the shared core ANGRY power requires unblocked damage > 0 - kept
 // as-is per file ownership (core.ts is out of scope). Flagged in the report.
+// Only the Fat Gremlin's takeTurn queues a RollMoveAction; the Sneaky, Mad,
+// Shield and Wizard gremlins set their next move themselves (setMove /
+// SetMoveAction), so their moves chain with no aiRng roll after turn 1.
 
 import type { MonsterDef } from "../../../engine/content/defs";
 import { ascTier, firstTurn, lastMove } from "../../util";
@@ -19,6 +22,7 @@ export const madGremlin: MonsterDef = {
     MAD_GREMLIN_SCRATCH: {
       id: "MAD_GREMLIN_SCRATCH",
       intent: "attack",
+      chainsNextMove: true,
       execute: (ctx, self) => attackPlayer(ctx, self, ctx.asc >= 2 ? 5 : 4),
     },
   },
@@ -34,6 +38,7 @@ export const sneakyGremlin: MonsterDef = {
     SNEAKY_GREMLIN_PUNCTURE: {
       id: "SNEAKY_GREMLIN_PUNCTURE",
       intent: "attack",
+      chainsNextMove: true,
       execute: (ctx, self) => attackPlayer(ctx, self, ctx.asc >= 2 ? 10 : 9),
     },
   },
@@ -68,6 +73,7 @@ export const shieldGremlin: MonsterDef = {
     SHIELD_GREMLIN_PROTECT: {
       id: "SHIELD_GREMLIN_PROTECT",
       intent: "defend",
+      chainsNextMove: true,
       execute: (ctx, self) => {
         const block = ascTier(ctx.asc, 7, [
           [7, 8],
@@ -82,6 +88,7 @@ export const shieldGremlin: MonsterDef = {
     SHIELD_GREMLIN_SHIELD_BASH: {
       id: "SHIELD_GREMLIN_SHIELD_BASH",
       intent: "attack",
+      chainsNextMove: true,
       execute: (ctx, self) => attackPlayer(ctx, self, ctx.asc >= 2 ? 8 : 6),
     },
   },
@@ -103,17 +110,17 @@ export const gremlinWizard: MonsterDef = {
     GREMLIN_WIZARD_CHARGING: {
       id: "GREMLIN_WIZARD_CHARGING",
       intent: "unknown",
+      chainsNextMove: true,
       execute: () => {}, // does nothing; charge bookkeeping lives in getMove
     },
     GREMLIN_WIZARD_ULTIMATE_BLAST: {
       id: "GREMLIN_WIZARD_ULTIMATE_BLAST",
       intent: "attack",
+      chainsNextMove: true,
       execute: (ctx, self) => attackPlayer(ctx, self, ctx.asc >= 2 ? 30 : 25),
     },
   },
   getMove: (ctx, self) => {
-    // ENGINE-GAP: the reference consumes no aiRng.random(99) after turn 1;
-    // this engine's rollMove consumes one per turn (value unused).
     if (firstTurn(self)) {
       self.data.charge = 1;
       return "GREMLIN_WIZARD_CHARGING";

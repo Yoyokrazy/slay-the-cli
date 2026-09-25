@@ -1809,7 +1809,7 @@ function buildOverlay(g: GameState, top: Overlay, ui: UiState, focusI: number | 
         name: id ? toAscii(potionName(bundle, id)) : "(empty)",
         targeted: def?.targeted ?? false,
         text: id ? toAscii(potionText(id, sacredBark(g))) || null : null,
-        blocked: def ? potionUseBlockedReason(def, { run: g.run, combat: g.combat }) : null,
+        blocked: def ? potionUseBlockedReason(def, { run: g.run, combat: g.combat, bundle }) : null,
       };
     }
     case "inspect": {

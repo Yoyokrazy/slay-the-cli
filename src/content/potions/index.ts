@@ -11,20 +11,21 @@
 
 import type { EffectCtx, PotionDef } from "../../engine/content/defs";
 import { PLAYER, monster } from "../../engine/core/ids";
-import { drawCards, moveCard } from "../../engine/combat/piles";
+import { drawCards, moveCard, reshuffleDiscardIntoDraw } from "../../engine/combat/piles";
 import { obtainRandomPotion } from "../../engine/run/rewards";
 import { hasRelic } from "../util";
 import {
   aliveMonsterIdxs,
   canUpgradeInCombat,
-  classPoolFilter,
-  colorlessPoolFilter,
+  inCombatClassPoolFilter,
+  inCombatColorlessPoolFilter,
   ensureContentEffects,
   healPlayer,
   randomCardDefs,
   relicDamage,
   relicDamageAll,
   requestCardPick,
+  returnDiscardToHandFree,
   upgradeInCombat,
 } from "../relics/lib";
 
@@ -79,7 +80,7 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 1,
     sacredBarkDoubles: true,
-    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, classPoolFilter(ctx, "attack"), "Attack Potion"),
+    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, inCombatClassPoolFilter(ctx, "attack"), "Attack Potion"),
   },
   {
     // "Upgrade all cards in your hand for the rest of combat."
@@ -145,7 +146,7 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 1,
     sacredBarkDoubles: true,
-    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, colorlessPoolFilter(), "Colorless Potion"),
+    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, inCombatColorlessPoolFilter(), "Colorless Potion"),
   },
   {
     // "Gain [1|2] Ritual."
@@ -186,11 +187,14 @@ export const allPotions: PotionDef[] = [
   },
   {
     // "Play the top [3|6] cards of your draw pile."
-    // Distilled Chaos adds several PlayTopCardActions; the action queue drains
-    // their NewQueue actions before cardQueue resolves, so all selected cards
-    // are out of draw before any of them is used. We keep staged queued cards in
-    // limbo for engine card-conservation; Perfected Strike counts only hand,
-    // draw, and discard, matching the reference's post-Unlimbo use timing.
+    // DistilledChaosPotion.use queues `potency` PlayTopCardActions, each aimed
+    // at getRandomMonster(null, true, cardRandomRng) picked right away, so all
+    // the target rolls come first. The actions drain their NewQueue actions
+    // before cardQueue resolves, so all selected cards are out of draw before
+    // any of them is used; an empty draw pile shuffles the discard back in
+    // (EmptyDeckShuffleAction) and the play continues. We keep staged queued
+    // cards in limbo for engine card-conservation; Perfected Strike counts only
+    // hand, draw, and discard, matching the reference's post-Unlimbo use timing.
     id: "DISTILLED_CHAOS",
     name: "Distilled Chaos",
     rarity: "uncommon",
@@ -200,11 +204,19 @@ export const allPotions: PotionDef[] = [
     sacredBarkDoubles: true,
     onUse: (ctx, _t, potency) => {
       const combat = ctx.combat!;
-      const top = combat.player.piles.draw.slice(0, potency);
-      for (const iid of top) {
+      const targets: number[] = [];
+      for (let i = 0; i < potency; i++) {
         const alive = aliveMonsterIdxs(ctx);
-        if (alive.length === 0) continue;
-        const target = alive[ctx.rng("cardRandomRng").random(alive.length - 1)]!;
+        if (alive.length === 0) break;
+        targets.push(alive[ctx.rng("cardRandomRng").random(alive.length - 1)]!);
+      }
+      for (const target of targets) {
+        const piles = combat.player.piles;
+        if (piles.draw.length === 0) {
+          if (piles.discard.length === 0) break;
+          reshuffleDiscardIntoDraw(ctx);
+        }
+        const iid = piles.draw[0]!;
         moveCard(ctx, iid, "limbo");
         combat.cardQueue.push({
           iid,
@@ -265,8 +277,11 @@ export const allPotions: PotionDef[] = [
   },
   {
     // "Fill all your empty potion slots with random potions."
-    // EntropicBrew.use rolls returnRandomPotion(true) once per potion slot;
-    // rolls that find no open slot are lost.
+    // EntropicBrew.use: in combat it queues ObtainPotionAction(returnRandomPotion(true))
+    // once per potion slot - the rolls happen even with Sozu, which only refuses
+    // the potions; out of combat Sozu stops it before any roll, and the rolls
+    // use the plain returnRandomPotion() (Fruit Juice allowed). Rolls that find
+    // no open slot are lost.
     id: "ENTROPIC_BREW",
     name: "Entropic Brew",
     rarity: "rare",
@@ -277,7 +292,9 @@ export const allPotions: PotionDef[] = [
     sacredBarkDoubles: false,
     onUse: (ctx) => {
       const slots = ctx.run.potions.length;
-      for (let i = 0; i < slots; i++) obtainRandomPotion(ctx, { limited: true });
+      const inCombat = ctx.combat !== null;
+      if (!inCombat && hasRelic(ctx, "SOZU")) return;
+      for (let i = 0; i < slots; i++) obtainRandomPotion(ctx, { limited: inCombat });
     },
   },
   {
@@ -447,6 +464,9 @@ export const allPotions: PotionDef[] = [
   },
   {
     // "Choose [1|2] card(s) in your discard pile; return to hand, cost 0 this turn."
+    // BetterDiscardPileToHandAction(potency, 0) is not optional: a discard pile
+    // no bigger than the potency comes back whole with no screen, otherwise the
+    // grid wants exactly `potency` cards (no cancel button in combat).
     id: "LIQUID_MEMORIES",
     name: "Liquid Memories",
     rarity: "uncommon",
@@ -457,16 +477,20 @@ export const allPotions: PotionDef[] = [
     onUse: (ctx, _t, potency) => {
       ensureContentEffects(ctx);
       const iids = [...ctx.combat!.player.piles.discard];
-      if (iids.length === 0) return;
+      if (iids.length === 0 || potency <= 0) return;
+      if (iids.length <= potency) {
+        returnDiscardToHandFree(ctx, iids);
+        return;
+      }
       ctx.queue.addToBottom({
         kind: "choice",
         request: {
           kind: "cards",
           pile: "discard",
           iids,
-          min: 0,
-          max: Math.min(potency, iids.length),
-          canCancel: true,
+          min: potency,
+          max: potency,
+          canCancel: false,
           reason: "Liquid Memories",
         },
         resume: "content:returnChosenToHandFree",
@@ -507,7 +531,7 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 1,
     sacredBarkDoubles: true,
-    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, classPoolFilter(ctx, "power"), "Power Potion"),
+    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, inCombatClassPoolFilter(ctx, "power"), "Power Potion"),
   },
   {
     // "Gain [5|10] Regeneration."
@@ -529,10 +553,12 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 1,
     sacredBarkDoubles: true,
-    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, classPoolFilter(ctx, "skill"), "Skill Potion"),
+    onUse: (ctx, _t, potency) => discoveryPotion(ctx, potency, inCombatClassPoolFilter(ctx, "skill"), "Skill Potion"),
   },
   {
     // "Escape from a non-boss combat. Receive no rewards."
+    // SmokeBomb.canUse: refused while any enemy in the room is a BOSS or has
+    // Back Attack (the Spire Shield and Spear); event fights can be left.
     id: "SMOKE_BOMB",
     name: "Smoke Bomb",
     rarity: "rare",
@@ -540,14 +566,21 @@ export const allPotions: PotionDef[] = [
     targeted: false,
     potency: 0,
     sacredBarkDoubles: false,
-    // bosses cannot be walked out on; event combats can
-    canUse: (ctx) => ctx.combat !== null && !(ctx.run.room?.kind === "combat" && ctx.run.room.roomKind === "boss"),
+    canUse: (ctx) =>
+      ctx.combat !== null &&
+      !(ctx.run.room?.kind === "combat" && ctx.run.room.roomKind === "boss") &&
+      !ctx.combat.monsters.some(
+        (m) => ctx.bundle.monsters.get(m.id)?.category === "boss" || m.powers.some((p) => p.id === "BACK_ATTACK"),
+      ),
     onUse: (ctx) => {
       ctx.rt.combatOver = "escape";
     },
   },
   {
     // "Draw [5|10] cards. Randomize the cost of cards in your hand."
+    // RandomizeHandCostAction: every card with cost >= 0 draws
+    // cardRandomRng.random(3); only a DIFFERENT cost is written ("if(card.cost
+    // != newCost)"), so a card already at that cost keeps its costForTurn.
     id: "SNECKO_OIL",
     name: "Snecko Oil",
     rarity: "rare",
@@ -562,8 +595,10 @@ export const allPotions: PotionDef[] = [
         const c = combat.cards[iid]!;
         if (c.cost >= 0) {
           const newCost = ctx.rng("cardRandomRng").random(3);
-          c.cost = newCost;
-          c.costForTurn = newCost;
+          if (c.cost !== newCost) {
+            c.cost = newCost;
+            c.costForTurn = newCost;
+          }
         }
       }
     },
@@ -583,7 +618,7 @@ export const allPotions: PotionDef[] = [
     },
   },
   {
-    // "Enter Calm or Wrath." DEPENDS: CALM/WRATH stance defs.
+    // "Enter Calm or Wrath." StancePotion.use offers ChooseWrath, then ChooseCalm.
     id: "STANCE_POTION",
     name: "Stance Potion",
     rarity: "uncommon",
@@ -595,9 +630,9 @@ export const allPotions: PotionDef[] = [
       ensureContentEffects(ctx);
       ctx.queue.addToBottom({
         kind: "choice",
-        request: { kind: "option", options: ["Calm", "Wrath"], reason: "Stance Potion" },
+        request: { kind: "option", options: ["Wrath", "Calm"], reason: "Stance Potion" },
         resume: "content:stanceChosen",
-        resumeArgs: { stances: ["CALM", "WRATH"] },
+        resumeArgs: { stances: ["WRATH", "CALM"] },
       });
     },
   },

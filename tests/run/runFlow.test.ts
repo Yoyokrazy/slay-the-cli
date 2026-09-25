@@ -8,7 +8,7 @@ import { makeTestCtx, autoWinCombat, stepRun, walkUntil, runSignature } from "./
 import { generateEncounters, getActDef } from "../../src/engine/run/encounters";
 import { resolveUnknownRoom, generateEventId, UNKNOWN_ROOM, migrateLegacyRunState } from "../../src/engine/run/runFlow";
 import { restHealAmount } from "../../src/engine/run/rest";
-import { generateShop } from "../../src/engine/run/shop";
+import { generateShop, SHOP } from "../../src/engine/run/shop";
 import { setupTreasureRoom } from "../../src/engine/run/treasure";
 import {
   NEOW_BONUS_TABLE_0,
@@ -19,7 +19,8 @@ import {
   applyNeowBonus,
 } from "../../src/engine/run/neow";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
-import { seedFromString } from "../../src/engine/core/rng";
+import { Rng, seedFromString } from "../../src/engine/core/rng";
+import { f32mul } from "../../src/engine/core/math";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/engine/run/mapGen";
 import type { MapNode } from "../../src/engine/run/runState";
 import { buildBaseContentBundle } from "../../src/content/index";
@@ -31,14 +32,6 @@ for (const id of ["THE_COURIER", "MEMBERSHIP_CARD"] as const) {
   if (!def) throw new Error(`missing ${id} relic`);
   courierBundle.relics.set(def.id, def);
 }
-const courierNoDiscountBundle = makeRunTestBundle();
-courierNoDiscountBundle.relics.set("THE_COURIER", {
-  id: "THE_COURIER",
-  name: "The Courier",
-  tier: "uncommon",
-  pool: "shared",
-  hooks: {},
-});
 const parasiteBundle = makeRunTestBundle();
 const parasiteDef = curseCards.find((c) => c.id === "PARASITE");
 if (!parasiteDef) throw new Error("missing PARASITE card def");
@@ -64,6 +57,12 @@ const mawBundle = makeRunTestBundle();
 const mawDef = allRelics.find((r) => r.id === "MAW_BANK");
 if (!mawDef) throw new Error("missing MAW_BANK relic");
 mawBundle.relics.set(mawDef.id, mawDef);
+const serpentBundle = makeRunTestBundle();
+for (const id of ["SSSERPENT_HEAD", "MEAL_TICKET"] as const) {
+  const def = allRelics.find((r) => r.id === id);
+  if (!def) throw new Error(`missing ${id} relic`);
+  serpentBundle.relics.set(def.id, def);
+}
 const pillowBundle = makeRunTestBundle();
 const pillowDef = allRelics.find((r) => r.id === "REGAL_PILLOW");
 if (!pillowDef) throw new Error("missing REGAL_PILLOW relic");
@@ -263,6 +262,38 @@ describe("master deck obtain hooks", () => {
       expect(bought.upgrades).toBe(1);
     });
   }
+});
+
+describe("Ssserpent Head / Meal Ticket around ? resolution", () => {
+  // AbstractDungeon.nextRoomTransition: relic.onEnterRoom(nextRoom.room) runs
+  // while a ? node still holds its EventRoom, EventHelper.roll resolves it
+  // after, and justEnteredRoom (Meal Ticket) sees the resolved room
+  function enterUnknown(outcome: "monster" | "shop", relic: string): { before: number; after: GameState } {
+    let s = createRun({ seed: `SERPENT-${outcome}`, bundle: serpentBundle, character: "IRONCLAD" });
+    s = advance(s, { cmd: "neowPick", i: 1 }, serpentBundle);
+    s.run.relics.push({ defId: relic, counter: 0 });
+    const x = s.run.map!.rows[0]!.findIndex((n) => n !== null);
+    s.run.map!.rows[0]![x]!.kind = "unknown";
+    const b = s.run.blizzard;
+    b.monsterChance = outcome === "monster" ? 1.0 : 0;
+    b.shopChance = outcome === "shop" ? 1.0 : 0;
+    b.treasureChance = 0;
+    s.run.hp = 40;
+    const before = s.run.gold;
+    return { before, after: advance(s, { cmd: "mapPick", x, y: 0 }, serpentBundle) };
+  }
+
+  test("Ssserpent Head pays 50 Gold on a ? node that turns into a fight", () => {
+    const { before, after } = enterUnknown("monster", "SSSERPENT_HEAD");
+    expect(after.run.room!.kind).toBe("combat");
+    expect(after.run.gold).toBe(before + 50);
+  });
+
+  test("Meal Ticket heals in a shop reached through a ? node", () => {
+    const { after } = enterUnknown("shop", "MEAL_TICKET");
+    expect(after.run.room!.kind).toBe("shop");
+    expect(after.run.hp).toBe(55);
+  });
 });
 
 describe("Maw Bank", () => {
@@ -614,7 +645,8 @@ describe("? room resolution", () => {
   });
 
   test("Tiny Chest forces every 4th ? room to treasure, still drawing the roll first", () => {
-    // EventHelper.roll: `float roll = eventRng.random()` comes before the Tiny Chest check
+    // EventHelper.java:82 "float roll = eventRng.random();" runs before the
+    // Tiny Chest counter, so the forced room still burns the eventRng draw
     const { s, ctx, registry } = freshCtx("TINY");
     s.run.relics.push({ defId: "TINY_CHEST", counter: 3 });
     const counterBefore = registry.get("eventRng").counter;
@@ -622,6 +654,16 @@ describe("? room resolution", () => {
     expect(registry.get("eventRng").counter).toBe(counterBefore + 1); // consumed, then overridden
     expect(s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(0);
     expect(s.run.blizzard.treasureChance).toBeCloseTo(0.02, 6); // reset as "chosen"
+    expect(s.run.blizzard.monsterChance).toBeCloseTo(0.2, 6); // escalated: not chosen
+  });
+
+  test("Tiny Chest counting rooms roll like any other ? room", () => {
+    const plain = freshCtx("TINYCOUNT");
+    const tiny = freshCtx("TINYCOUNT");
+    tiny.s.run.relics.push({ defId: "TINY_CHEST", counter: 0 });
+    for (let i = 0; i < 3; i++) expect(resolveUnknownRoom(tiny.ctx)).toBe(resolveUnknownRoom(plain.ctx));
+    expect(tiny.s.run.relics.find((r) => r.defId === "TINY_CHEST")!.counter).toBe(3);
+    expect(tiny.registry.get("eventRng").counter).toBe(plain.registry.get("eventRng").counter);
   });
 
   test("Tiny Chest counts on the relic for every ? room, events included", () => {
@@ -1052,33 +1094,32 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
     expect(s.run.potions).toContain(boughtPotion);
   });
 
-  test("shop: Courier restock prices use the normal rounded discount path", () => {
-    const makeShop = (seed: string, content = courierBundle) =>
-      forceRoom(
-        seed,
+  test("shop: Courier card restock price is setPrice's float chain, truncated once, no A16", () => {
+    // ShopScreen.setPrice (ShopScreen.java:837-847): "(int)tmpPrice" after
+    // base * merchantRng.random(0.9F, 1.1F) * 0.8F (Courier) - no rounding step
+    for (const asc of [0, 16]) {
+      let s = forceRoom(
+        `COURIER_PRICE${asc}`,
         (ctx, state) => {
+          state.run.ascension = asc;
           giveRelic(state, "THE_COURIER");
           ctx.run.room = { kind: "shop", shop: generateShop(ctx) };
         },
-        content,
+        courierBundle,
       );
-    let plain = makeShop("COURIER_PRICE", courierNoDiscountBundle);
-    let discounted = makeShop("COURIER_PRICE", courierBundle);
-    if (plain.run.room?.kind !== "shop" || discounted.run.room?.kind !== "shop") throw new Error("expected shop");
-    plain.run.gold = 5000;
-    discounted.run.gold = 5000;
-    plain = advance(plain, { cmd: "shopBuy", kind: "card", idx: 0 }, courierNoDiscountBundle);
-    discounted = advance(discounted, { cmd: "shopBuy", kind: "card", idx: 0 }, courierBundle);
-    if (plain.run.room?.kind !== "shop" || discounted.run.room?.kind !== "shop") throw new Error("expected shop");
-    const plainSlot = plain.run.room.shop.cards[0]!;
-    const discountedSlot = discounted.run.room.shop.cards[0]!;
-    expect(discountedSlot.sold).toBe(false);
-    expect(discountedSlot.id).toBe(plainSlot.id);
-    expect(discountedSlot.rarity).toBe(plainSlot.rarity);
-    expect(discountedSlot.price).toBe(Math.round(plainSlot.price * 0.8));
+      s.run.gold = 5000;
+      const merchantBefore = Rng.fromState(s.rng.run.merchantRng);
+      s = advance(s, { cmd: "shopBuy", kind: "card", idx: 0 }, courierBundle);
+      if (s.run.room?.kind !== "shop") throw new Error("expected shop");
+      const slot = s.run.room.shop.cards[0]!;
+      expect(slot.sold).toBe(false);
+      const jitter = merchantBefore.randomFloatRange(0.9, 1.1);
+      const base = SHOP.basePrices.cardByRarity[slot.rarity];
+      expect(slot.price).toBe(Math.trunc(f32mul(f32mul(base, jitter), 0.8)));
+    }
   });
 
-  test("shop: buying Courier itself does not restock the purchased slot", () => {
+  test("shop: buying The Courier restocks its own slot, never with a shop-excluded relic", () => {
     let s = forceRoom(
       "BUY_COURIER",
       (ctx) => {
@@ -1088,10 +1129,15 @@ describe("rooms: rest / treasure / shop / event stubs", () => {
       courierBundle,
     );
     s.run.gold = 5000;
+    const pricesBefore = shopOf(s).cards.map((c) => c.price);
     s = advance(s, { cmd: "shopBuy", kind: "relic", idx: 0 }, courierBundle);
-    if (s.run.room?.kind !== "shop") throw new Error("expected shop");
-    expect(s.run.room.shop.relics[0]!.sold).toBe(true);
+    const shop = shopOf(s);
+    // StoreRelic.java:114 "relic.relicId.equals("The Courier") || hasRelic(...)"
+    expect(shop.relics[0]!.sold).toBe(false);
+    expect(["THE_COURIER", "MAW_BANK", "OLD_COIN", "SMILING_MASK"]).not.toContain(shop.relics[0]!.id);
     expect(s.run.relics.some((r) => r.defId === "THE_COURIER")).toBe(true);
+    // the Courier's 0.8 is a setup discount only: nothing is re-priced mid-shop
+    expect(shop.cards.map((c) => c.price)).toEqual(pricesBefore);
   });
 
   test("shop: Courier restock is deterministic for a fixed seed", () => {
@@ -1301,6 +1347,15 @@ describe("act transitions", () => {
     s = advance(s, { cmd: "skipRewards" }, bundle);
     expect(s.run.act).toBe(2);
     expect(s.run.hp).toBe(expected);
+  });
+
+  test("the cardRng counter jump skips an exact 250 boundary (strict bounds in dungeonTransitionSetup)", () => {
+    let s = run("ACTJUMP");
+    s = walkUntil(s, bundle, (st) => st.run.room!.kind === "rewards" && st.run.room!.source === "boss");
+    s.rng.run.cardRng.counter = 250; // "cardRng.counter > 250 && cardRng.counter < 500" is false
+    s = advance(s, { cmd: "skipRewards" }, bundle);
+    expect(s.run.act).toBe(2);
+    expect(s.rng.run.cardRng.counter).toBe(250);
   });
 
   test("act 3 boss victory ends the run as a victory (Act 4 TODO)", () => {

@@ -15,6 +15,7 @@ import { ironcladEffects } from "../../src/content/cards/ironclad/effects";
 import { allRelics, relicSupportPowers } from "../../src/content/relics";
 import { allPotions, effectivePotency } from "../../src/content/potions";
 import { returnRandomPotion } from "../../src/engine/run/rewards";
+import { Rng } from "../../src/engine/core/rng";
 
 // ---------------------------------------------------------------------------
 // local bundle (same pattern as relics.test.ts)
@@ -182,6 +183,27 @@ describe("death-save potions and relics", () => {
     expect(s.run.hp).toBe(24);
     expect(s.run.potions[0]).toBeNull();
     expect(relicCounter(s, "LIZARD_TAIL")).toBe(0);
+  });
+
+  test("Fairy in a Bottle heals at least 1 HP (FairyPotion.use: if(healAmt < 1) healAmt = 1)", () => {
+    for (let i = 0; i < 30; i++) {
+      let s = createCombatGame({
+        seed: `FAIRYMIN${i}`,
+        bundle: B,
+        character: "IRONCLAD",
+        deck: Array(12).fill({ defId: "T_STRIKE" }),
+        monsters: ["T_DUMMY"],
+        hp: 1,
+        maxHp: 3,
+      });
+      if (s.combat!.monsters[0]!.move !== "ATTACK") continue;
+      s.run.potions[0] = "FAIRY_POTION";
+      s = advance(s, { cmd: "endTurn" }, B);
+      expect(s.outcome).toBeNull();
+      expect(s.run.hp).toBe(1);
+      return;
+    }
+    throw new Error("no seed opened with ATTACK");
   });
 
   test("Lizard Tail death-save heals once per run", () => {
@@ -464,6 +486,88 @@ describe("card-manipulation potions", () => {
     expect(s.combat!.player.piles.draw.length).toBe(4); // 12 - 5 hand - 3 played
   });
 
+  test("Distilled Chaos: a short draw pile shuffles the discard back in and still plays 3", () => {
+    // PlayTopCardAction: an empty draw pile queues EmptyDeckShuffleAction and
+    // retries; all `potency` targets are rolled when the potion is drunk
+    let s = game({});
+    s.combat!.monsters[0]!.hp = 200;
+    s.combat!.monsters[0]!.maxHp = 200;
+    const piles = s.combat!.player.piles;
+    piles.discard.push(...piles.draw.splice(1)); // 1 card left to draw
+    const rolls = s.rng.floor.cardRandomRng.counter;
+    s = usePotion(s, "DISTILLED_CHAOS");
+    expect(monsterHp(s)).toBe(200 - 18);
+    // 1 drawn, the 6-card discard shuffled in, 2 more drawn: 4 left, 3 played
+    expect(s.combat!.player.piles.draw.length).toBe(4);
+    expect(s.combat!.player.piles.discard.length).toBe(3);
+    // 3 target rolls up front, then the reshuffle's shuffleRng (not cardRandomRng)
+    expect(s.rng.floor.cardRandomRng.counter).toBe(rolls + 3);
+  });
+
+  test("Distilled Chaos rolls every target even when the piles run dry", () => {
+    let s = game({});
+    const piles = s.combat!.player.piles;
+    piles.exhaust.push(...piles.draw.splice(1), ...piles.discard.splice(0)); // 1 card to play, no discard
+    const rolls = s.rng.floor.cardRandomRng.counter;
+    const hp0 = monsterHp(s);
+    s = usePotion(s, "DISTILLED_CHAOS");
+    expect(monsterHp(s)).toBe(hp0 - 6);
+    expect(s.rng.floor.cardRandomRng.counter).toBe(rolls + 3);
+  });
+
+  test("Snecko Oil only rewrites a card whose rolled cost differs (RandomizeHandCostAction)", () => {
+    let kept = 0;
+    for (let i = 0; i < 8; i++) {
+      let s = game({ seed: `SNECKO-SAME-${i}` });
+      for (const iid of s.combat!.player.piles.hand) s.combat!.cards[iid]!.costForTurn = 0; // made free this turn
+      const freeBefore = new Set(s.combat!.player.piles.hand);
+      const rng = Rng.fromState(s.rng.floor.cardRandomRng);
+      s = usePotion(s, "SNECKO_OIL");
+      expect(s.combat!.player.piles.hand).toHaveLength(10);
+      for (const iid of s.combat!.player.piles.hand) {
+        const c = s.combat!.cards[iid]!;
+        const rolled = rng.random(3);
+        if (rolled === 1) {
+          expect(c.cost).toBe(1);
+          expect(c.costForTurn).toBe(freeBefore.has(iid) ? 0 : 1);
+          if (freeBefore.has(iid)) kept++;
+        } else {
+          expect(c.cost).toBe(rolled);
+          expect(c.costForTurn).toBe(rolled);
+        }
+      }
+    }
+    expect(kept).toBeGreaterThan(0); // the "same cost" branch really happened
+  });
+
+  test("Gambler's Brew discards are manual (GamblingChipAction.triggerOnManualDiscard)", () => {
+    let s = game({});
+    s = usePotion(s, "GAMBLERS_BREW");
+    s = advance(s, { cmd: "choose", indices: [0, 1, 2] }, B);
+    expect(s.combat!.turnFlags.manualDiscardsThisTurn).toBe(3);
+    expect(s.combat!.player.piles.discard.length).toBe(3);
+    expect(s.combat!.player.piles.hand.length).toBe(5);
+  });
+
+  test("discovery potions never offer a HEALING-tagged card", () => {
+    // returnTrulyRandomCardInCombat(type): "!c.hasTag(CardTags.HEALING)"
+    const healer: CardDef = {
+      id: "T_HEAL_ATTACK", name: "T Heal Attack", color: "red", type: "attack", rarity: "rare", cost: 1, target: "enemy",
+      values: { damage: 1 }, upgradeValues: { damage: 2 }, keywords: ["tag:healing"], primitives: [{ do: "damage", n: "damage" }],
+    };
+    B.cards.set(healer.id, healer);
+    try {
+      for (let i = 0; i < 40; i++) {
+        let s = game({ seed: `DISC-HEAL-${i}` });
+        s = usePotion(s, "ATTACK_POTION");
+        const options = (s.pending!.request as { kind: "option"; options: string[] }).options;
+        expect(options).not.toContain(healer.name);
+      }
+    } finally {
+      B.cards.delete(healer.id);
+    }
+  });
+
   test("Distilled Chaos Perfected Strike+ uses PlayTopCardAction pile timing", () => {
     let s = game({
       deck: [
@@ -598,25 +702,38 @@ describe("card-manipulation potions", () => {
     expect(s.combat!.player.piles.hand.length).toBe(5);
   });
 
-  test("Liquid Memories returns a discarded card to hand at cost 0", () => {
+  test("Liquid Memories: a discard pile no bigger than the potency comes back whole, no screen", () => {
+    // BetterDiscardPileToHandAction: "if(player.discardPile.size() <= numberOfCards && !optional)"
     let s = game({});
     s = play(s, "T_STRIKE", 0); // now in discard
     s = usePotion(s, "LIQUID_MEMORIES");
-    expect(s.pending!.request.kind).toBe("cards");
-    s = advance(s, { cmd: "choose", indices: [0] }, B);
+    expect(s.pending).toBeNull();
     expect(s.combat!.player.piles.discard.length).toBe(0);
     expect(s.combat!.player.piles.hand.length).toBe(5);
     const returned = s.combat!.player.piles.hand[4]!;
     expect(s.combat!.cards[returned]!.costForTurn).toBe(0);
   });
+
+  test("Liquid Memories: a bigger discard pile asks for exactly the potency, no cancel", () => {
+    let s = game({});
+    s = play(s, "T_STRIKE", 0);
+    s = play(s, "T_STRIKE", 0);
+    s = usePotion(s, "LIQUID_MEMORIES");
+    const req = s.pending!.request as { kind: string; min: number; max: number; canCancel: boolean };
+    expect(req).toMatchObject({ kind: "cards", min: 1, max: 1, canCancel: false });
+    s = advance(s, { cmd: "choose", indices: [1] }, B);
+    expect(s.combat!.player.piles.discard.length).toBe(1);
+    expect(s.combat!.player.piles.hand.length).toBe(4);
+  });
 });
 
 describe("stance potions", () => {
-  test("Stance Potion: choosing Wrath enters Wrath", () => {
+  test("Stance Potion: Wrath is offered first, Calm second", () => {
+    // StancePotion.use: stanceChoices.add(new ChooseWrath()); stanceChoices.add(new ChooseCalm())
     let s = game({});
     s = usePotion(s, "STANCE_POTION");
-    expect(s.pending!.request.kind).toBe("option");
-    s = advance(s, { cmd: "choose", indices: [1] }, B);
+    expect(s.pending!.request).toMatchObject({ kind: "option", options: ["Wrath", "Calm"] });
+    s = advance(s, { cmd: "choose", indices: [0] }, B);
     expect(s.combat!.player.stance).toBe("WRATH");
   });
 
@@ -689,13 +806,49 @@ describe("potency plumbing", () => {
       expect(s.run.potions.filter((p) => p !== null)).toHaveLength(3);
     });
 
-    test("Sozu blocks the obtained potions", () => {
+    test("Sozu: in combat every slot still rolls, and every potion is refused", () => {
+      // EntropicBrew.use queues ObtainPotionAction(returnRandomPotion(true)) per
+      // slot before any Sozu check; ObtainPotionAction flashes Sozu instead
       const s0 = game({ seed: "BREW-SOZU", relics: ["SOZU"] });
       s0.run.potions = ["ENTROPIC_BREW", null, null];
       const before = s0.rng.run.potionRng.counter;
       const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
       expect(s.run.potions).toEqual([null, null, null]);
+      expect(s.rng.run.potionRng.counter).toBeGreaterThanOrEqual(before + 3 * 3);
+    });
+
+    test("Sozu: out of combat nothing is rolled", () => {
+      const s0 = game({ seed: "BREW-SOZU-MAP", relics: ["SOZU"] });
+      s0.combat = null;
+      s0.run.potions = ["ENTROPIC_BREW", null, null];
+      const before = s0.rng.run.potionRng.counter;
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.potions).toEqual([null, null, null]);
       expect(s.rng.run.potionRng.counter).toBe(before);
+    });
+
+    test("out of combat the rolls are the plain returnRandomPotion(), not the limited one", () => {
+      const s0 = game({ seed: "BREW-PLAIN" });
+      s0.combat = null;
+      s0.run.potions = ["ENTROPIC_BREW", null, null];
+      const expected = structuredClone(s0);
+      expected.run.potions = [null, null, null];
+      const registry = RngRegistry.fromState(expected.rng);
+      const ctx: EffectCtx = {
+        run: expected.run,
+        combat: null,
+        queue: new ActionQueue(),
+        bundle: B,
+        rt: { pending: null, currentItem: null, combatOver: null },
+        rng: (st: Stream) => registry.get(st),
+        asc: 0,
+        emit: () => {},
+        requestChoice: () => {},
+      };
+      const rolls = [returnRandomPotion(ctx), returnRandomPotion(ctx), returnRandomPotion(ctx)];
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.potions).toEqual(rolls);
+      expect(s.rng.run.potionRng.counter).toBe(registry.get("potionRng").counter);
     });
 
     test("limited random potions never produce Fruit Juice", () => {
@@ -801,6 +954,70 @@ describe("potency plumbing", () => {
       expect(() => advance(s0, { cmd: "usePotion", slot: 0 }, B)).toThrow("cannot be used");
       expect(s0.run.potions[0]).toBe("SMOKE_BOMB"); // still in the belt
       expect(s0.combat).not.toBeNull();
+    });
+
+    test("refuses any fight with a BOSS enemy or a Back Attack enemy, whatever the room", () => {
+      // SmokeBomb.canUse: "if(m.hasPower("BackAttack")) return false; if(m.type == BOSS) return false;"
+      const bossBundle: ContentBundle = { ...B, monsters: new Map(B.monsters) };
+      const dummy = B.monsters.get("T_DUMMY")!;
+      bossBundle.monsters.set("T_BOSS_DUMMY", { ...dummy, id: "T_BOSS_DUMMY", category: "boss" });
+      const boss = createCombatGame({
+        seed: "SMOKE-BOSS",
+        bundle: bossBundle,
+        character: "IRONCLAD",
+        deck: Array(12).fill({ defId: "T_STRIKE" }),
+        relics: [],
+        monsters: ["T_BOSS_DUMMY"],
+        maxHp: 80,
+      });
+      boss.run.potions[0] = "SMOKE_BOMB";
+      boss.run.room = combatRoom("monster"); // e.g. Mind Bloom's boss fight in an event room
+      expect(() => advance(boss, { cmd: "usePotion", slot: 0 }, bossBundle)).toThrow("cannot be used");
+
+      const back = game({});
+      back.run.potions[0] = "SMOKE_BOMB";
+      back.run.room = combatRoom("elite");
+      back.combat!.monsters[0]!.powers.push({ id: "BACK_ATTACK", amount: 1, justApplied: false, data: null });
+      expect(() => advance(back, { cmd: "usePotion", slot: 0 }, B)).toThrow("cannot be used");
+    });
+
+    test("escaping still fires onVictory and rolls the room's gold, relic tier and potion, showing none", () => {
+      // endBattle -> player.onVictory; AbstractRoom.update adds the gold,
+      // dropReward() and addPotionToRewards(); openCombat(TEXT[1], true) skips
+      // setupItemReward, so no card reward is rolled and nothing is claimable
+      const s0 = game({ relics: ["BURNING_BLOOD"], hp: 50 });
+      s0.run.potions[0] = "SMOKE_BOMB";
+      s0.run.room = combatRoom("elite");
+      const counters = (g: GameState) => ({
+        treasure: g.rng.run.treasureRng.counter,
+        relic: g.rng.run.relicRng.counter,
+        potion: g.rng.run.potionRng.counter,
+        card: g.rng.run.cardRng.counter,
+      });
+      const before = counters(s0);
+      const pity = s0.run.blizzard.potionChance;
+      const gold = s0.run.gold;
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.room!.kind).toBe("map");
+      expect(s.run.hp).toBe(56); // Burning Blood
+      expect(s.run.gold).toBe(gold);
+      const after = counters(s);
+      expect(after.treasure).toBe(before.treasure + 1);
+      expect(after.relic).toBe(before.relic + 1);
+      expect(after.potion).toBeGreaterThan(before.potion);
+      expect(after.card).toBe(before.card);
+      expect(Math.abs(s.run.blizzard.potionChance - pity)).toBe(10);
+    });
+
+    test("escaping runs Meat on the Bone before onVictory, like a won fight", () => {
+      // AbstractRoom.endBattle: Meat on the Bone's onTrigger, then
+      // player.onVictory (Burning Blood), so it sees the HP before that heal
+      const s0 = game({ relics: ["MEAT_ON_THE_BONE", "BURNING_BLOOD"], hp: 40 });
+      s0.run.potions[0] = "SMOKE_BOMB";
+      s0.run.room = combatRoom("monster");
+      const s = advance(s0, { cmd: "usePotion", slot: 0 }, B);
+      expect(s.run.room!.kind).toBe("map");
+      expect(s.run.hp).toBe(40 + 12 + 6);
     });
   });
 });

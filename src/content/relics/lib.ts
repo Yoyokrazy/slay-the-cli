@@ -20,7 +20,7 @@ import type { HookCtx } from "../../engine/core/hooks";
 import { foldHook, fireHook } from "../../engine/core/hooks";
 import { PLAYER, monster } from "../../engine/core/ids";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
-import { makeTempCard } from "../../engine/combat/interpreter";
+import { discardCard, makeTempCard } from "../../engine/combat/interpreter";
 import { moveCard } from "../../engine/combat/piles";
 
 /** Relic counter accessor shorthand (relic hooks always receive one). */
@@ -252,31 +252,34 @@ const exhaustChosen: EffectFn = (ctx, args) => {
   }
 };
 
-// Adjudication: these discards are not "manual" (the game's GamblingChipAction
-// moves cards directly without firing discard triggers).
+// GamblingChipAction (Gambling Chip and Gambler's Brew): the draw is queued on
+// top first ("addToTop(new DrawCardAction(p, selectedCards.size()))"), then
+// every chosen card is discarded on the spot as a MANUAL discard -
+// GameActionManager.incrementDiscard(false) (Tingsha, Tough Bandages, the
+// discarded-this-turn count) and c.triggerOnManualDiscard() (Reflex,
+// Tactician) - so anything those triggers put on top resolves before the draw.
 const discardChosenThenDraw: EffectFn = (ctx, args) => {
   const { iids, chosen } = args as { iids: number[]; chosen: number[] };
-  let n = 0;
-  for (const i of chosen) {
-    const iid = iids[i];
-    if (iid !== undefined) {
-      ctx.queue.addToBottom({ kind: "discard", sel: { kind: "iid", iid }, manual: false });
-      n++;
-    }
-  }
-  if (n > 0) ctx.queue.addToBottom({ kind: "draw", n });
+  const picked = chosen.flatMap((i) => (iids[i] === undefined ? [] : [iids[i]!]));
+  if (picked.length === 0) return;
+  ctx.queue.addToTop({ kind: "draw", n: picked.length });
+  for (const iid of picked) discardCard(ctx, iid, true);
 };
 
-const returnChosenToHandFree: EffectFn = (ctx, args) => {
-  const { iids, chosen } = args as { iids: number[]; chosen: number[] };
-  for (const i of chosen) {
-    const iid = iids[i];
-    if (iid === undefined) continue;
+/** BetterDiscardPileToHandAction's move: each card goes discard -> hand at
+ *  cost 0 this turn while the hand has room; the rest stay put. */
+export function returnDiscardToHandFree(ctx: EffectCtx, iids: number[]): void {
+  for (const iid of iids) {
     if (ctx.combat!.player.piles.hand.length >= 10) break; // hand full: remaining stay put
     moveCard(ctx, iid, "hand");
     const c = ctx.combat!.cards[iid];
     if (c) c.costForTurn = 0;
   }
+}
+
+const returnChosenToHandFree: EffectFn = (ctx, args) => {
+  const { iids, chosen } = args as { iids: number[]; chosen: number[] };
+  returnDiscardToHandFree(ctx, chosen.flatMap((i) => (iids[i] === undefined ? [] : [iids[i]!])));
 };
 
 const stanceChosen: EffectFn = (ctx, args) => {

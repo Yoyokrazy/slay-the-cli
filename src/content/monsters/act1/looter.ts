@@ -2,6 +2,9 @@
 // Turn 1+2: MUG. Turn 3: 50/50 LUNGE or SMOKE_BOMB. LUNGE -> SMOKE_BOMB -> ESCAPE.
 // MUG/LUNGE steal min(playerGold, THIEVERY) gold (15; asc>=17: 20). Escape keeps
 // the stolen gold; if killed first the reward layer refunds self.data.stolenGold.
+// Looter.java takeTurn sets every next move itself (setMove / SetMoveAction)
+// and never queues a RollMoveAction: every move chains, so after the opening
+// roll the only aiRng draws are the two randomBoolean calls below.
 
 import type { MonsterDef, EffectCtx } from "../../../engine/content/defs";
 import type { MonsterState } from "../../../engine/combat/combatState";
@@ -29,6 +32,7 @@ export const looter: MonsterDef = {
     LOOTER_MUG: {
       id: "LOOTER_MUG",
       intent: "attack",
+      chainsNextMove: true,
       displayDamage: (ctx, self) => previewThievingAttack(ctx, self, mugDamage(ctx.asc)),
       execute: (ctx, self) => {
         // turn-1 in-game dialog roll (consumed for aiRng parity, value unused)
@@ -40,6 +44,7 @@ export const looter: MonsterDef = {
     LOOTER_LUNGE: {
       id: "LOOTER_LUNGE",
       intent: "attack",
+      chainsNextMove: true,
       displayDamage: (ctx, self) => previewThievingAttack(ctx, self, lungeDamage(ctx.asc)),
       execute: (ctx, self) => {
         stealGold(ctx, self);
@@ -49,19 +54,19 @@ export const looter: MonsterDef = {
     LOOTER_SMOKE_BOMB: {
       id: "LOOTER_SMOKE_BOMB",
       intent: "defend",
+      chainsNextMove: true,
       execute: (ctx, self) => selfBlock(ctx, self, 6),
     },
     LOOTER_ESCAPE: {
       id: "LOOTER_ESCAPE",
       intent: "escape",
+      chainsNextMove: true,
       execute: (ctx, self) => {
         ctx.queue.addToBottom({ kind: "monsterEscape", idx: self.idx });
       },
     },
   },
   getMove: (ctx, self) => {
-    // ENGINE-GAP: the reference consumes no aiRng.random(99) after turn 1;
-    // this engine's rollMove consumes one per turn (value unused).
     if (firstTurn(self)) return "LOOTER_MUG";
     switch (lastMove(self)) {
       case "LOOTER_MUG":

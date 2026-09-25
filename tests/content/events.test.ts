@@ -8,6 +8,8 @@ import { createRun, advance, type GameState } from "../../src/engine/game";
 import { buildBaseContentBundle } from "../../src/content/index";
 import { makeTestCtx } from "../run/runCtx";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
+import { Rng } from "../../src/engine/core/rng";
+import { classCardPool } from "../../src/engine/run/rewards";
 import type { EventRoomData, RoomState } from "../../src/engine/run/runState";
 import eventsCorpus from "../../data/corpus/events.json";
 
@@ -364,9 +366,10 @@ describe("act 2 events", () => {
     expect(s.run.deck.length).toBe(9);
   });
 
-  test("Colosseum: forced slaver fight with no rewards (pity advances), then flee or the Nob bout", () => {
+  test("Colosseum: forced slaver fight shows no rewards but still rolls its potion, then flee or the Nob bout", () => {
     let s = forceEvent("CO1", "COLOSSEUM", { mutate: boost });
     const pityBefore = s.run.blizzard.potionChance;
+    const potionRngBefore = s.rng.run.potionRng.counter;
     s = pick(s, 0);
     const c1 = roomOf(s);
     if (c1.kind !== "combat") throw new Error("expected combat");
@@ -376,7 +379,10 @@ describe("act 2 events", () => {
     const back = roomOf(s);
     if (back.kind !== "event") throw new Error("expected event screen after fight 1");
     expect(back.screen).toBe("wonFirst");
-    expect(s.run.blizzard.potionChance).toBe(pityBefore + 10); // invisible pity advance
+    // rewardAllowed = false hides the screen, not addPotionToRewards: the roll
+    // is consumed and the pity moves either way
+    expect(s.rng.run.potionRng.counter).toBeGreaterThan(potionRngBefore);
+    expect(Math.abs(s.run.blizzard.potionChance - pityBefore)).toBe(10);
     expect(() => pick(s, 0)).toThrow("unavailable"); // no re-fighting the slavers
 
     const fled = pick(s, 1);
@@ -398,6 +404,19 @@ describe("act 2 events", () => {
     } else {
       expect(() => pick(s, 2)).toThrow("unavailable"); // content pending guard
     }
+  });
+
+  test("Colosseum: whatever the slaver fight dropped is cleared before the Nob bout", () => {
+    // Colosseum.java:139 "AbstractDungeon.getCurrRoom().rewards.clear()"
+    if (!bundle.monsters.has("TASKMASTER") || !bundle.monsters.has("GREMLIN_NOB")) return;
+    let s = forceEvent("CO2", "COLOSSEUM", { mutate: (g) => { boost(g); g.run.blizzard.potionChance = 60; } });
+    s = winCombat(pick(s, 0));
+    expect(s.run.blizzard.potionChance).toBe(50); // chance 100: it dropped
+    s.run.blizzard.potionChance = -40; // the Nob bout's own roll: chance 0
+    s = winCombat(pick(s, 2));
+    const rw = roomOf(s);
+    if (rw.kind !== "rewards") throw new Error("expected rewards");
+    expect(rw.entries.some((en) => en.kind === "potion")).toBe(false);
   });
 
   test("Cursed Tome: pages cost 1/2/3 HP; take costs 10 (15 at A15) and offers a book relic; stop costs 3", () => {
@@ -479,11 +498,16 @@ describe("act 2 events", () => {
     }
     f = pick(f, 1);
     expect(roomOf(f).kind).toBe("combat");
+    const pityBefore = f.run.blizzard.potionChance;
+    const potionRngBefore = f.rng.run.potionRng.counter;
     f = winCombat(f);
     const rw = roomOf(f);
     if (rw.kind !== "rewards") throw new Error("expected rewards");
     expect(rw.entries.some((e) => e.kind === "relic" && e.id === "RED_MASK")).toBe(true);
-    expect(rw.entries.some((e) => e.kind === "potion")).toBe(false); // no potion roll here
+    // the EventRoom still runs addPotionToRewards (40 + blizzardPotionMod)
+    expect(f.rng.run.potionRng.counter).toBeGreaterThan(potionRngBefore);
+    const dropped = rw.entries.some((e) => e.kind === "potion");
+    expect(f.run.blizzard.potionChance).toBe(pityBefore + (dropped ? -10 : 10));
   });
 
   test("The Nest: 99 gold (50 at A15) or 6 damage + Ritual Dagger", () => {
@@ -660,6 +684,91 @@ describe("act 3 events", () => {
     const after = roomOf(s);
     if (after.kind !== "rewards") throw new Error("still rewards");
     expect(after.entries.filter((e) => e.kind === "card" && !e.taken).length).toBe(3);
+  });
+
+  test("Sensory Stone's colorless rewards replay getColorlessRewardCards call for call", () => {
+    // AbstractDungeon.java:1934-1978: rollRareOrUncommon(0.3F) = cardRng.randomBoolean(0.3F),
+    // a RARE resets cardBlizzRandomizer to 5, dupe reroll, and no upgrade roll
+    for (let i = 0; i < 10; i++) {
+      for (const question of [false, true]) {
+        const s = forceEvent(`STJ${i}`, "SENSORY_STONE", {
+          mutate: (g) => {
+            g.run.blizzard.cardRarityFactor = -7;
+            if (question) g.run.relics.push({ defId: "QUESTION_CARD", counter: 0 });
+          },
+        });
+        const rng = Rng.fromState(s.rng.run.cardRng);
+        let factor = -7;
+        const expected: { id: string; rarity: "rare" | "uncommon"; upgraded: boolean }[] = [];
+        for (let k = 0; k < (question ? 4 : 3); k++) {
+          const rarity: "rare" | "uncommon" = rng.randomBoolean(0.3) ? "rare" : "uncommon";
+          if (rarity === "rare") factor = 5;
+          const pool = [...bundle.cards.values()].filter((c) => c.color === "colorless" && c.rarity === rarity).map((c) => c.id);
+          let id: string;
+          do id = pool[rng.random(pool.length - 1)]!;
+          while (expected.some((e) => e.id === id));
+          expected.push({ id, rarity, upgraded: false });
+        }
+        const after = pick(s, 0); // one reward, no HP cost
+        const rw = roomOf(after);
+        if (rw.kind !== "rewards") throw new Error("expected rewards");
+        const got = rw.entries.flatMap((e) => (e.kind === "card" ? [{ id: e.id, rarity: e.rarity, upgraded: e.upgraded }] : []));
+        expect(got).toEqual(expected);
+        expect(after.run.blizzard.cardRarityFactor).toBe(factor);
+        expect(after.rng.run.cardRng.counter).toBe(rng.counter);
+      }
+    }
+  });
+
+  test("event fights roll their card reward like the EventRoom they happen in (3/37), not as an elite", () => {
+    // EventRoom has no getCardRarity override: AbstractRoom.java:164-165 3/37;
+    // Dead Adventurer / Colosseum's eliteTrigger does not touch the rarity
+    for (const eventId of ["DEAD_ADVENTURER", "COLOSSEUM"]) {
+      const encounterId = eventId === "COLOSSEUM" ? "COLOSSEUM_EVENT_NOBS" : "DEAD_ADVENTURER";
+      for (let i = 0; i < 12; i++) {
+        const s = forceEvent(`EVRARITY${eventId}${i}`, eventId, { skipOnEnter: true });
+        const { ctx, saveRng } = makeTestCtx(s, bundle);
+        const rng = Rng.fromState(ctx.rng("cardRng").saveState());
+        let factor = s.run.blizzard.cardRarityFactor;
+        const expected: string[] = [];
+        for (let k = 0; k < 3; k++) {
+          const roll = rng.random(99) + factor;
+          const rarity = roll < 3 ? "rare" : roll < 40 ? "uncommon" : "common";
+          if (rarity === "rare") factor = 5;
+          else if (rarity === "common") factor = Math.max(factor - 1, -40);
+          const pool = classCardPool(ctx, rarity);
+          let id: string;
+          do id = pool[rng.random(pool.length - 1)]!;
+          while (expected.includes(id));
+          expected.push(id);
+        }
+        const data = eventId === "DEAD_ADVENTURER" ? { phase: 3, rewards: ["GOLD", "NOTHING", "RELIC"], encounter: "GREMLIN_NOB" } : {};
+        bundle.events.get(eventId)!.onCombatVictory!(ctx, encounterId, data);
+        saveRng();
+        const rw = roomOf(s);
+        if (rw.kind !== "rewards") throw new Error("expected rewards");
+        expect(rw.entries.flatMap((e) => (e.kind === "card" ? [e.id] : []))).toEqual(expected);
+      }
+    }
+  });
+
+  test("Golden Idol adds its 25% to event-fight gold (RewardItem applyGoldBonus outside a TreasureRoom)", () => {
+    const plain = forceEvent("IDOLEV", "MASKED_BANDITS", { skipOnEnter: true });
+    const idol = forceEvent("IDOLEV", "MASKED_BANDITS", {
+      skipOnEnter: true,
+      mutate: (g) => g.run.relics.push({ defId: "GOLDEN_IDOL", counter: 0 }),
+    });
+    const goldOf = (g: GameState): number => {
+      const { ctx, saveRng } = makeTestCtx(g, bundle);
+      bundle.events.get("MASKED_BANDITS")!.onCombatVictory!(ctx, "MASKED_BANDITS_EVENT", {});
+      saveRng();
+      const rw = roomOf(g);
+      if (rw.kind !== "rewards") throw new Error("expected rewards");
+      const gold = rw.entries.find((e) => e.kind === "gold");
+      return gold && gold.kind === "gold" ? gold.amount : -1;
+    };
+    const base = goldOf(plain);
+    expect(goldOf(idol)).toBe(base + Math.round(base * 0.25));
   });
 
   test("Tomb of Lord Red Mask: buying the mask costs everything; wearing it pays 222", () => {

@@ -172,11 +172,17 @@ export interface PotionDef {
   /** Refuse the potion instead of burning it (Smoke Bomb outside a non-boss
    *  fight). Deliberately a structural subset of EffectCtx so the pure CLI
    *  view can ask the same question without building a context. */
-  canUse?: (ctx: { run: RunState; combat: CombatState | null }) => boolean;
+  canUse?: (ctx: PotionUseCtx) => boolean;
   onUse: (ctx: EffectCtx, target: number | null, potency: number) => void;
 }
 
-export function potionUseBlockedReason(def: PotionDef, ctx: { run: RunState; combat: CombatState | null }): string | null {
+export interface PotionUseCtx {
+  run: RunState;
+  combat: CombatState | null;
+  bundle: ContentBundle;
+}
+
+export function potionUseBlockedReason(def: PotionDef, ctx: PotionUseCtx): string | null {
   if (def.canUse && !def.canUse(ctx)) return `${def.name} cannot be used here`;
   if (!ctx.combat && !def.usableOutOfCombat) return `${def.name} cannot be used here`;
   return null;
@@ -202,6 +208,10 @@ export interface MonsterMoveDef {
     | "unknown";
   /** executes the move by enqueuing actions */
   execute(ctx: EffectCtx, self: MonsterState): void;
+  /** The game's takeTurn sets the next move itself (setMove / SetMoveAction)
+   *  and queues no RollMoveAction, so no aiRng.random(99) is consumed after
+   *  this move: getMove runs with roll = -1 and must not read it. */
+  chainsNextMove?: boolean;
   /** Read-only attack preview, used instead of execute when present. Damage
    *  goes through the live calc; partial defaults to true unless all effects
    *  are known. goldLoss is bounded by current gold, before other enemies act. */

@@ -2,18 +2,18 @@
 -- THE MERCHANT - you have 99G -----------------------------------------------------------------------------------------
                                                                                                                         
                                     current                                 upgraded                                    
-                     +(1)---------------------------------+  +(1)---------------------------------+                     
-                     | Cleave                             |  | Cleave+                            |                     
-                     | Attack - common                    |  | Attack - common                    |                     
-                     | Deal 8 damage to ALL enemies.      |  | Deal 11 damage to ALL enemies.     |                     
+                     +(2)---------------------------------+  +(2)---------------------------------+                     
+                     | Searing Blow                       |  | Searing Blow+                      |                     
+                     | Attack - uncommon                > |  | Attack - uncommon                > |                     
+                     | Deal 12 damage.                    |  | Deal 16 damage.                    |                     
+                     | Can be Upgraded any number of      |  | Can be Upgraded any number of      |                     
+                     | times.                             |  | times.                             |                     
                      |                                    |  |                                    |                     
+                     | Upgrade: Improve a card to its +   |  | Upgrade: Improve a card to its +   |                     
+                     | version.                           |  | version.                           |                     
                      +------------------------------------+  +------------------------------------+                     
                                                                                                                         
                                         card 1/13 - [j/k] next/prev  [Esc] close                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
                                                                                                                         
                                                                                                                         
                                                                                                                         

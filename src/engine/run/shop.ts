@@ -1,22 +1,31 @@
-// Shop inventory + pricing, exact per data/corpus/meta.json "shop"
-// (sts_lightspeed Shop.cpp). Streams: card identities/rarities = cardRng,
+// Shop inventory + pricing per data/corpus/meta.json "shop", checked line by
+// line against the decompiled game: the Merchant constructor (card picks),
+// ShopScreen.init / initCards / initRelics / initPotions / applyDiscount /
+// purgeCard / purchaseCard / setPrice / getNewPrice, StoreRelic.purchaseRelic
+// and StorePotion.purchasePotion. Streams: card identities/rarities = cardRng
+// (the Courier's class-card restock pick is MathUtils.random = mathUtilRng),
 // relic tiers + ALL price jitter + sale slot = merchantRng, potions = potionRng.
 //
-// ASCENSION 16 - DISPUTED (meta.shop.disputed.ascension16Prices):
-//   sts_lightspeed applies applyDiscount(0.80f) at ascension >= 16, which makes
-//   shops CHEAPER; the wiki documents A16 as "Shops are more costly." (commonly
-//   +10%). We implement the WIKI side: prices (and removal cost) x1.10, rounded,
-//   applied before relic price hooks (Courier 0.80, Membership Card 0.50).
+// ASCENSION 16 (settles meta.shop.disputed on the wiki side): ShopScreen.init
+// "if(AbstractDungeon.ascensionLevel >= 16) applyDiscount(1.1F, false)" - every
+// item price x1.1, rounded; the removal cost is NOT touched (affectPurge false).
 //
-// COURIER RESTOCK (decompiled game authority over known sts_lightspeed bugs):
-//   purchaseCard / StoreRelic.purchaseRelic / StorePotion.purchasePotion replace
-//   bought slots when Courier was owned at purchase entry. New-slot prices use
-//   the same setup discounts/order; we intentionally do NOT copy lightspeed's
-//   getNewCardPrice duplicate Courier check nor getNewPrice rounding discard.
+// DISCOUNTS: applyDiscount rounds after every step, in a fixed order: A16 x1.1,
+// then The Courier x0.8, then Membership Card x0.5 (ShopScreen.init). Each
+// discount resets the removal cost from the BASE purge cost ("actualPurgeCost =
+// MathUtils.round((float)purgeCost * multiplier)"), so with both relics the
+// Membership 0.5 wins at setup; Smiling Mask pins it at 50.
+//
+// COURIER RESTOCK: a bought slot is replaced while The Courier is owned, and
+// buying The Courier restocks its own slot (StoreRelic.java:114). Restocks skip
+// A16: cards use setPrice, "(int)(base * jitter [* 1.2] [* 0.8] [* 0.5])" in
+// float; relics and potions use getNewPrice, round(base * jitter) then
+// round(* 0.8), round(* 0.5).
 
 import type { EffectCtx } from "../content/defs";
+import type { HookCtx } from "../core/hooks";
 import type { ShopState, ShopCardSlot, ShopRelicSlot, ShopPotionSlot, CardRarityRoll, RelicPoolTier } from "./runState";
-import type { CardId, PotionId } from "../core/ids";
+import type { CardId, PotionId, RelicId } from "../core/ids";
 import { PLAYER } from "../core/ids";
 import { f32mul } from "../core/math";
 import { classCardPool, colorlessCardPool, hasRelic, obtainRelicFromPoolEnd, returnRandomPotion } from "./rewards";
@@ -36,11 +45,12 @@ export const SHOP = {
   saleSlots: 5, // saleIdx = merchantRng.random(4)
   removal: { basePrice: 75, increasePerPurchase: 25, smilingMask: 50 },
   relicTierRoll: { commonBelow: 48, uncommonBelow: 82 },
-  ascension16Factor: 1.1, // DISPUTED - wiki side implemented (lightspeed uses 0.80)
+  ascension16Factor: 1.1, // ShopScreen.init applyDiscount(1.1F, false) - items only, never the purge
   colorlessRareChance: 0.3,
 } as const;
 
-/** Shop::rollCardRarityShop - reads cardRarityFactor but does NOT update it. */
+/** rollRarity in a ShopRoom: getCardRarity(roll, false) with base 9/37
+ *  (ShopRoom.java:41-42) - reads cardRarityFactor but does NOT update it. */
 export function rollCardRarityShop(ctx: EffectCtx): CardRarityRoll {
   const roll = ctx.rng("cardRng").random(99) + ctx.run.blizzard.cardRarityFactor;
   if (roll < SHOP.cardRarityRoll.rareBelow) return "rare";
@@ -48,7 +58,7 @@ export function rollCardRarityShop(ctx: EffectCtx): CardRarityRoll {
   return "uncommon";
 }
 
-/** Shop::rollRelicTier (merchantRng): <48 common, <82 uncommon, else rare. */
+/** ShopScreen.rollRelicTier (merchantRng): <48 common, <82 uncommon, else rare. */
 export function rollShopRelicTier(ctx: EffectCtx): RelicPoolTier {
   const roll = ctx.rng("merchantRng").random(99);
   if (roll < SHOP.relicTierRoll.commonBelow) return "common";
@@ -58,14 +68,17 @@ export function rollShopRelicTier(ctx: EffectCtx): RelicPoolTier {
 
 type ShopCardType = "attack" | "skill" | "power";
 
-/** One class-card slot: rarity roll (power slot promotes COMMON -> UNCOMMON),
- *  then a uniform cardRng pick from the class pool of that type+rarity. */
-function rollShopClassCard(ctx: EffectCtx, type: ShopCardType): { id: CardId; rarity: CardRarityRoll } {
+/** One class-card slot: getCardFromPool(rollRarity(), type, useRng)
+ *  (AbstractDungeon.java:2126-2176): an empty COMMON power pool falls through
+ *  to UNCOMMON before any pick. The pick is cardRng for the Merchant's own
+ *  stock (useRng true) and MathUtils.random (mathUtilRng) for a Courier
+ *  restock (purchaseCard passes useRng false). */
+function rollShopClassCard(ctx: EffectCtx, type: ShopCardType, pickRng: "cardRng" | "mathUtilRng" = "cardRng"): { id: CardId; rarity: CardRarityRoll } {
   let rarity = rollCardRarityShop(ctx);
   if (type === "power" && rarity === "common") rarity = "uncommon";
   const pool = classCardPool(ctx, rarity).filter((id) => ctx.bundle.cards.get(id)!.type === type);
   if (pool.length === 0) throw new Error(`empty shop pool: ${type}/${rarity} for ${ctx.run.character}`);
-  return { id: pool[ctx.rng("cardRng").random(pool.length - 1)]!, rarity };
+  return { id: pool[ctx.rng(pickRng).random(pool.length - 1)]!, rarity };
 }
 
 function rollColorlessCard(ctx: EffectCtx, rarity: CardRarityRoll): CardId {
@@ -74,39 +87,55 @@ function rollColorlessCard(ctx: EffectCtx, rarity: CardRarityRoll): CardId {
   return pool[ctx.rng("cardRng").random(pool.length - 1)]!;
 }
 
-/** Removal cost: Smiling Mask fixes it at 50; else 75 + 25 per prior purchase,
- *  then the (disputed) A16 factor. ShopScreen's applyDiscount recomputes the
- *  removal cost from that base on every discount pass instead of compounding,
- *  so Membership Card's half wins over The Courier's 20% off. */
+/** The owned relics' price hooks in ShopScreen's hard-coded order (The Courier,
+ *  then Membership Card), any other content hook after them in relic order.
+ *  Every price hook is a flat multiplier (Courier 0.8, Membership Card 0.5),
+ *  applied the way the game does it: "(float)price * multiplier" in float. */
+function priceModifiers(ctx: EffectCtx): ((price: number) => number)[] {
+  const owned = ctx.run.relics.map((r) => r.defId);
+  const javaOrder = ["THE_COURIER", "MEMBERSHIP_CARD"].filter((id) => owned.includes(id));
+  const ordered = [...javaOrder, ...owned.filter((id) => !javaOrder.includes(id))];
+  const hookCtx: HookCtx = { ...ctx, owner: PLAYER, relicCounter: { get: () => 0, set: () => {} } };
+  const out: ((price: number) => number)[] = [];
+  for (const id of ordered) {
+    const hook = ctx.bundle.relics.get(id)?.hooks.modifyPrice;
+    if (hook) {
+      const factor = hook(hookCtx, 1);
+      out.push((price) => f32mul(price, factor));
+    }
+  }
+  return out;
+}
+
+/** purgeCost: 75 + 25 per removal bought this run (ShopScreen.purgeCard). */
+function basePurgeCost(ctx: EffectCtx): number {
+  return SHOP.removal.basePrice + SHOP.removal.increasePerPurchase * ctx.run.history.cardRemovesPurchased;
+}
+
+/** Removal cost at setup (ShopScreen.init): each owned discount sets
+ *  round(purgeCost * factor) from the BASE cost, A16 never applies, and Smiling
+ *  Mask pins it at 50. */
 export function computeRemovalCost(ctx: EffectCtx): number {
   if (hasRelic(ctx.run, "SMILING_MASK")) return SHOP.removal.smilingMask;
-  let cost = SHOP.removal.basePrice + SHOP.removal.increasePerPurchase * ctx.run.history.cardRemovesPurchased;
-  cost = applyA16(ctx, cost);
-  if (hasRelic(ctx.run, "MEMBERSHIP_CARD")) return relicDiscount(ctx, "MEMBERSHIP_CARD", cost);
-  if (hasRelic(ctx.run, "THE_COURIER")) return relicDiscount(ctx, "THE_COURIER", cost);
+  const base = basePurgeCost(ctx);
+  let cost = base;
+  for (const modify of priceModifiers(ctx)) cost = Math.round(modify(base));
   return cost;
 }
 
-function applyA16(ctx: EffectCtx, price: number): number {
-  // DISPUTED A16 multiplier - wiki side (+10%); see file header.
-  return ctx.run.ascension >= 16 ? Math.round(price * SHOP.ascension16Factor) : price;
-}
-
-/** One relic's modifyPrice pass, rounded like ShopScreen.applyDiscount. */
-function relicDiscount(ctx: EffectCtx, relicId: string, price: number): number {
-  const hook = ctx.bundle.relics.get(relicId)?.hooks.modifyPrice;
-  if (!hook) return price;
-  return Math.round(hook({ ...ctx, owner: PLAYER, relicCounter: { get: () => 0, set: () => {} } }, price));
-}
-
-/** ShopScreen.init: the A16 pass, then The Courier's, then Membership Card's
- *  (that fixed order, whatever order they were obtained in), each its own
- *  MathUtils.round; any other price relic folds after them. */
+/** ShopScreen.init's applyDiscount chain for a setup price: A16 x1.1, then each
+ *  owned discount, rounding after every step. */
 function finalizePrice(ctx: EffectCtx, price: number): number {
-  let p = applyA16(ctx, price);
-  const owned = ctx.run.relics.map((r) => r.defId);
-  const rank = (id: string) => (id === "THE_COURIER" ? 0 : id === "MEMBERSHIP_CARD" ? 1 : 2);
-  for (const id of [...owned].sort((a, b) => rank(a) - rank(b))) p = relicDiscount(ctx, id, p);
+  let p = ctx.run.ascension >= 16 ? Math.round(f32mul(price, SHOP.ascension16Factor)) : price;
+  for (const modify of priceModifiers(ctx)) p = Math.round(modify(p));
+  return p;
+}
+
+/** getNewPrice (ShopScreen.java:518-540): a restocked relic/potion price is the
+ *  jittered base, then each owned discount rounded in turn - no A16. */
+function restockPrice(ctx: EffectCtx, jittered: number): number {
+  let p = jittered;
+  for (const modify of priceModifiers(ctx)) p = Math.round(modify(p));
   return p;
 }
 
@@ -117,17 +146,27 @@ function baseShopCardPrice(ctx: EffectCtx, rarity: CardRarityRoll, colorless: bo
   return Math.trunc(price);
 }
 
-/** StoreRelic's base price is AbstractRelic.getPrice(): the relic's OWN tier
- *  (a pool fallback into another tier is priced as that tier; Circlet 400). */
-function relicPriceKey(ctx: EffectCtx, id: string, rolled: RelicPoolTier): keyof typeof SHOP.basePrices.relicByTier {
+/** setPrice (ShopScreen.java:837-847), the Courier card restock price: the
+ *  float chain base * jitter [* 1.2] [* 0.8 Courier] [* 0.5 Membership Card],
+ *  truncated once, with no A16 and no sale. */
+function restockCardPrice(ctx: EffectCtx, rarity: CardRarityRoll, colorless: boolean): number {
+  let price = f32mul(SHOP.basePrices.cardByRarity[rarity], ctx.rng("merchantRng").randomFloatRange(SHOP.cardJitter.min, SHOP.cardJitter.max));
+  if (colorless) price = f32mul(price, SHOP.colorlessFactor);
+  for (const modify of priceModifiers(ctx)) price = modify(price);
+  return Math.trunc(price);
+}
+
+/** relic.getPrice(): the price follows the relic's own tier (a pool fallback can
+ *  hand over a relic of another tier; event relics are SPECIAL, 400, like
+ *  Circlet), else the rolled one. */
+function relicPriceTier(ctx: EffectCtx, id: RelicId, rolled: RelicPoolTier): keyof typeof SHOP.basePrices.relicByTier {
   const tier = ctx.bundle.relics.get(id)?.tier;
   if (tier === "event" || tier === "special") return "special";
   return tier ?? rolled;
 }
 
-function baseShopRelicPrice(ctx: EffectCtx, id: string, tier: RelicPoolTier): number {
-  const base = SHOP.basePrices.relicByTier[relicPriceKey(ctx, id, tier)];
-  return Math.round(f32mul(base, ctx.rng("merchantRng").randomFloatRange(SHOP.otherJitter.min, SHOP.otherJitter.max)));
+function baseShopRelicPrice(ctx: EffectCtx, tier: keyof typeof SHOP.basePrices.relicByTier): number {
+  return Math.round(f32mul(SHOP.basePrices.relicByTier[tier], ctx.rng("merchantRng").randomFloatRange(SHOP.otherJitter.min, SHOP.otherJitter.max)));
 }
 
 function baseShopPotionPrice(ctx: EffectCtx, id: PotionId): number {
@@ -139,43 +178,33 @@ function baseShopPotionPrice(ctx: EffectCtx, id: PotionId): number {
   );
 }
 
-function priceShopCard(ctx: EffectCtx, rarity: CardRarityRoll, colorless: boolean): number {
-  return finalizePrice(ctx, baseShopCardPrice(ctx, rarity, colorless));
-}
-
-function priceShopRelic(ctx: EffectCtx, id: string, tier: RelicPoolTier): number {
-  return finalizePrice(ctx, baseShopRelicPrice(ctx, id, tier));
-}
-
-function priceShopPotion(ctx: EffectCtx, id: PotionId): number {
-  return finalizePrice(ctx, baseShopPotionPrice(ctx, id));
-}
-
-/** Courier card restock: class cards keep the bought card's type and roll shop
- * rarity on cardRng; colorless cards use merchantRng's 30% rare roll. No setup
- * duplicate retry and no sale-slot halving is applied to restocks. */
+/** Courier card restock (ShopScreen.purchaseCard): class cards keep the bought
+ * card's type, roll the shop rarity on cardRng and pick with MathUtils.random;
+ * colorless cards roll merchantRng.random() < 0.3 for RARE and pick on cardRng.
+ * No duplicate retry and no sale halving; priced by setPrice. */
 export function restockShopCardSlot(ctx: EffectCtx, slot: ShopCardSlot): void {
   if (slot.colorless) {
     const rarity = ctx.rng("merchantRng").randomBoolean(SHOP.colorlessRareChance) ? "rare" : "uncommon";
     const id = rollColorlessCard(ctx, rarity);
     slot.id = id;
     slot.rarity = rarity;
-    slot.price = priceShopCard(ctx, rarity, true);
+    slot.price = restockCardPrice(ctx, rarity, true);
   } else {
     const type = ctx.bundle.cards.get(slot.id)!.type;
     if (type !== "attack" && type !== "skill" && type !== "power") throw new Error(`invalid shop card type: ${type}`);
-    const pick = rollShopClassCard(ctx, type);
+    const pick = rollShopClassCard(ctx, type, "mathUtilRng");
     slot.id = pick.id;
     slot.rarity = pick.rarity;
-    slot.price = priceShopCard(ctx, pick.rarity, false);
+    slot.price = restockCardPrice(ctx, pick.rarity, false);
   }
   slot.sold = false;
 }
 
-/** Courier relic restock (StoreRelic.purchaseRelic): returnRandomRelicEnd off
- *  Shop::rollRelicTier (common/uncommon/rare, including for the original
- *  shop-tier slot), re-rolled tier and relic while it lands on Old Coin,
- *  Smiling Mask, Maw Bank or The Courier. */
+/** Courier relic restock (StoreRelic.purchaseRelic): returnRandomRelicEnd(
+ * rollRelicTier()) - the END of the rolled tier's pool, canSpawn asked as in a
+ * ShopRoom - re-rolled tier and relic while it lands on Old Coin, Smiling
+ * Mask, Maw Bank or The Courier, priced by getNewPrice from the relic's own
+ * tier. The shop-tier slot restocks through the same common/uncommon/rare roll. */
 export function restockShopRelicSlot(ctx: EffectCtx, slot: ShopRelicSlot): void {
   let tier = rollShopRelicTier(ctx);
   let id = obtainRelicFromPoolEnd(ctx, tier, true);
@@ -185,23 +214,23 @@ export function restockShopRelicSlot(ctx: EffectCtx, slot: ShopRelicSlot): void 
   }
   slot.id = id;
   slot.tier = tier;
-  slot.price = priceShopRelic(ctx, id, tier);
+  slot.price = restockPrice(ctx, baseShopRelicPrice(ctx, relicPriceTier(ctx, id, tier)));
   slot.sold = false;
 }
 
-/** Courier potion restock: returnRandomPotion on potionRng, priced like setup.
- * If potion generation is blocked/empty, the purchased slot remains sold. */
+/** Courier potion restock (StorePotion.purchasePotion): returnRandomPotion on
+ * potionRng, priced by getNewPrice. With an empty pool the slot stays sold. */
 export function restockShopPotionSlot(ctx: EffectCtx, slot: ShopPotionSlot): void {
   const id = returnRandomPotion(ctx);
   if (id === null) return;
   slot.id = id;
-  slot.price = priceShopPotion(ctx, id);
+  slot.price = restockPrice(ctx, baseShopPotionPrice(ctx, id));
   slot.sold = false;
 }
 
-/** Generate the full shop inventory (Shop::setup / setupCards / setupRelics /
- *  setupPotions). Per-stream call order is preserved exactly; the sale slot is
- *  halved (integer division) BEFORE the A16/relic price factors. */
+/** Generate the full shop inventory (Merchant constructor, then ShopScreen.init:
+ *  initCards, initRelics, initPotions, the discounts). The sale slot is halved
+ *  (integer division) BEFORE the A16/relic price factors. */
 export function generateShop(ctx: EffectCtx): ShopState {
   const merchantRng = ctx.rng("merchantRng");
 
@@ -234,28 +263,26 @@ export function generateShop(ctx: EffectCtx): ShopState {
   const saleIdx = merchantRng.random(SHOP.saleSlots - 1);
   cards[saleIdx]!.price = Math.trunc(cards[saleIdx]!.price / 2);
 
-  // --- relics: ShopScreen.initRelics, slot by slot: tier roll (the third slot
-  // is SHOP tier), a returnRandomRelicEnd draw (the END of the pool, canSpawn
-  // asked as in a ShopRoom: no Maw Bank, Old Coin, Smiling Mask or Courier
-  // here), then that slot's merchantRng price roll ---
+  // --- relics (initRelics): per slot a tier roll (merchantRng), a pop from the
+  // END of that pool (canSpawn asked as in a ShopRoom: no Maw Bank, Old Coin,
+  // Smiling Mask or Courier here), then its price roll (merchantRng); the
+  // third slot is always SHOP tier ---
   const relics: ShopRelicSlot[] = [];
   for (let i = 0; i < 3; i++) {
-    const tier: RelicPoolTier = i === 2 ? "shop" : rollShopRelicTier(ctx);
+    const tier: RelicPoolTier = i !== 2 ? rollShopRelicTier(ctx) : "shop";
     const id = obtainRelicFromPoolEnd(ctx, tier, true);
-    relics.push({ id, tier, price: baseShopRelicPrice(ctx, id, tier), sold: false });
+    relics.push({ id, tier, price: baseShopRelicPrice(ctx, relicPriceTier(ctx, id, tier)), sold: false });
   }
 
-  // --- potions: 3 picks (potionRng), then price rolls (merchantRng) ---
-  const potionIds = [returnRandomPotion(ctx), returnRandomPotion(ctx), returnRandomPotion(ctx)];
-  const potions = potionIds
-    .filter((id): id is string => id !== null)
-    .map((id) => ({
-      id,
-      price: baseShopPotionPrice(ctx, id),
-      sold: false,
-    }));
+  // --- potions (initPotions): 3 picks (potionRng), each priced (merchantRng).
+  // No Sozu check: StorePotion.purchasePotion refuses the sale instead ---
+  const potions: ShopPotionSlot[] = [];
+  for (let i = 0; i < 3; i++) {
+    const id = returnRandomPotion(ctx);
+    if (id !== null) potions.push({ id, price: baseShopPotionPrice(ctx, id), sold: false });
+  }
 
-  // --- A16 (disputed, wiki side) then relic price hooks (Courier/Membership) ---
+  // --- A16 x1.1 then the Courier / Membership Card discounts, rounding each ---
   for (const c of cards) c.price = finalizePrice(ctx, c.price);
   for (const r of relics) r.price = finalizePrice(ctx, r.price);
   for (const p of potions) p.price = finalizePrice(ctx, p.price);
@@ -263,16 +290,22 @@ export function generateShop(ctx: EffectCtx): ShopState {
   return { cards, relics, potions, removalCost: computeRemovalCost(ctx), removalUsed: false };
 }
 
-/** Mid-shop reprice: buying a price-modifying relic (Membership Card) applies
- *  its factor to remaining unsold prices and the removal cost immediately. */
+/** Buying a relic mid-shop (StoreRelic.purchaseRelic): only Membership Card
+ *  re-prices the shop - applyDiscount(0.5F, true) on every remaining price, and
+ *  the removal cost becomes round(purgeCost * 0.5) from the base cost; Smiling
+ *  Mask pins the removal cost at 50. The Courier discounts nothing mid-shop
+ *  (its 0.8 only applies when a shop is set up). */
 export function repriceAfterRelic(ctx: EffectCtx, shop: ShopState, relicId: string): void {
-  const def = ctx.bundle.relics.get(relicId);
-  if (!def?.hooks.modifyPrice) return;
-  const apply = (p: number) => relicDiscount(ctx, relicId, p);
+  if (relicId === "SMILING_MASK" && !shop.removalUsed) shop.removalCost = SHOP.removal.smilingMask;
+  if (relicId !== "MEMBERSHIP_CARD") return;
+  const hook = ctx.bundle.relics.get(relicId)?.hooks.modifyPrice;
+  if (!hook) return;
+  const factor = hook({ ...ctx, owner: PLAYER, relicCounter: { get: () => 0, set: () => {} } }, 1);
+  const apply = (p: number) => Math.round(f32mul(p, factor));
   for (const c of shop.cards) if (!c.sold) c.price = apply(c.price);
   for (const r of shop.relics) if (!r.sold) r.price = apply(r.price);
   for (const p of shop.potions) if (!p.sold) p.price = apply(p.price);
-  // applyDiscount(0.5f, true): the removal cost is recomputed from its base
-  // (Smiling Mask keeps 50), not halved again from its discounted value
-  if (!shop.removalUsed) shop.removalCost = computeRemovalCost(ctx);
+  if (!shop.removalUsed) {
+    shop.removalCost = hasRelic(ctx.run, "SMILING_MASK") ? SHOP.removal.smilingMask : apply(basePurgeCost(ctx));
+  }
 }

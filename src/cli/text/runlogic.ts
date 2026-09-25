@@ -413,14 +413,20 @@ export function rewardLabel(e: RewardEntry, bundle: ContentBundle): string {
 /** Why a reward can't be taken right now (null = takeable). */
 export function rewardBlocked(e: RewardEntry, run: RunState): string | null {
   if (e.taken) return "already taken";
-  if (e.kind === "potion" && !run.potions.includes(null)) return "potion belt is full";
+  if (e.kind === "potion" && !run.potions.includes(null) && !hasSozu(run)) return "potion belt is full";
   return null;
 }
 
+function hasSozu(run: RunState): boolean {
+  return run.relics.some((r) => r.defId === "SOZU");
+}
+
 /** Advisory shown beside a reward that is takeable but will not do anything -
- *  Ectoplasm zeroes every gold gain, so the row would otherwise just vanish. */
+ *  Ectoplasm zeroes every gold gain, and Sozu eats a claimed potion, so the row
+ *  would otherwise just vanish. */
 export function rewardAdvisory(e: RewardEntry, run: RunState): string | null {
   if (e.kind === "gold" && run.relics.some((r) => r.defId === "ECTOPLASM")) return "no gold - Ectoplasm";
+  if (e.kind === "potion" && hasSozu(run)) return "no potion - Sozu";
   return null;
 }
 

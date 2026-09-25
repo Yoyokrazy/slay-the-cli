@@ -1,4 +1,4 @@
- HP 63/80 | G 199 | F6 A1 | ASC0 | K:--- | POT WPL | DECK 10 | REL 4 | Ironclad | FXREST0                                           
+ HP 62/80 | G 199 | F6 A1 | ASC0 | K:--- | POT WPL | DECK 10 | REL 4 | Ironclad | FXREST0                                           
 -- REST SITE -----------------------------------------------------------------------------------------------------------------------
                                                                                                                                     
                                                                                                                                     
@@ -12,7 +12,7 @@
                                                                                                                                     
 +-[1]------------+ +-[2]------------+ +-[3]------------+ +-[4]------------+ +-[5]------------+ +-[6]------------+ +-[7]------------+
 | REST           | | SMITH          | | RECALL         | | LIFT           | | TOKE           | | DIG            | | LEAVE          |
-| Heal 17 HP     | | Upgrade a card | | Take the Ruby  | | Gain 1         | | Remove a card  | | Obtain a relic | |                |
+| Heal 18 HP     | | Upgrade a card | | Take the Ruby  | | Gain 1         | | Remove a card  | | Obtain a relic | |                |
 |                | |                | | Key            | | Strength       | |                | |                | |                |
 +----------------+ +----------------+ +----------------+ +----------------+ +----------------+ +----------------+ +----------------+
                                                                                                                                     
