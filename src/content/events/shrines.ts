@@ -101,10 +101,12 @@ const matchAndKeep: EventDef = {
             const idA = dd.cards[dd.board[a]!]!;
             const idB = dd.cards[dd.board[slot]!]!;
             c.emit("eventReveal", { slots: [a, slot], cards: [idA, idB] });
-            if (dd.board[a] === dd.board[slot]) {
+            // GremlinMatchGame: a pair matches on equal card ids, so at A15 two
+            // random curse slots that rolled the same curse match each other
+            if (idA !== null && idA === idB) {
               dd.matched[a] = true;
               dd.matched[slot] = true;
-              if (idA) obtainCard(c, idA);
+              obtainCard(c, idA);
             }
             if (dd.attempts >= 5 || dd.matched.every((m) => m)) endEvent(c);
           },

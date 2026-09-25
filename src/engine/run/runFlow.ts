@@ -298,10 +298,11 @@ export function resolveUnknownRoom(ctx: EffectCtx): "monster" | "shop" | "treasu
 
 // --- event selection --------------------------------------------------------------------
 
-/** generateEvent (GameContext.cpp:2032-2047): the selection rolls run on a COPY
- *  of eventRng (the reference passes it by value) - only the ?-room outcome
- *  roll advances the main stream. Chosen ids are removed from their pool.
- *  Returns null for INVALID (all pools empty). Exported for tests. */
+/** generateEvent (AbstractDungeon.java:2516-2536): the selection rolls run on a
+ *  COPY of eventRng (EventRoom.onPlayerEntry builds new Random(seed,
+ *  eventRng.counter)) - only the ?-room outcome roll advances the main stream.
+ *  Chosen ids are removed from their pool. Returns null for INVALID (all pools
+ *  empty). Exported for tests. */
 export function generateEventId(ctx: EffectCtx): EventId | null {
   const run = ctx.run;
   const evRng = Rng.fromState(ctx.rng("eventRng").saveState());

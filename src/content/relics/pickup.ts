@@ -66,12 +66,11 @@ function classPool(ctx: EffectCtx): CardId[] {
   return [...classCardPool(ctx, "common"), ...classCardPool(ctx, "uncommon"), ...classCardPool(ctx, "rare")];
 }
 
-/** One transform replacement: uniform over the class pool with miscRng, the
- *  run's shared transform path (src/content/events/lib.ts transformDeckCard).
- *  ENGINE-NOTE: the reference's getTransformedCard picks by the transformed
- *  card's color (curse -> curse, colorless -> colorless) and excludes the card
- *  itself; that draw is not pinned by meta.json, so this stays identical to
- *  the Neow/event transforms rather than inventing a second rule. */
+/** One transform replacement: uniform over the class pool with miscRng.
+ *  ENGINE-GAP: the game's transformCard (Astrolabe included) picks by the
+ *  transformed card's color (curse -> curse, colorless -> colorless) and
+ *  excludes the card itself, as src/engine/run/deck.ts transformPool does for
+ *  the Neow/event transforms; this relic path still draws the class pool. */
 function obtainTransformed(ctx: EffectCtx, upgrades: number): void {
   const pool = classPool(ctx);
   if (pool.length === 0) return;

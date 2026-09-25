@@ -36,7 +36,7 @@
         {
           "label": "Banana: heal 1/3 of max HP",
           "requires": null,
-          "outcomes": [{ "effect": "healHp", "amount": "pct:0.3333", "rounding": "floor", "id": null }],
+          "outcomes": [{ "effect": "healHp", "amount": null, "id": null, "detail": "maxHealth / 3, integer division (decompiled BigFish.java)" }],
           "random": null,
           "a15": null
         },
@@ -113,7 +113,7 @@
           "requires": null,
           "outcomes": [
             { "effect": "other", "amount": null, "id": null, "detail": "ambush chance = phase*25 + 25 (%); roll miscRng.random(99) < chance. No ambush: grant reward[phase] from [gold30, nothing, relic] shuffled at setup (java shuffle seeded miscRng.randomLong()); relic = screenless, tier via relicRng 50/33/17; then phase+1" },
-            { "effect": "startCombat", "amount": null, "id": "DEAD_ADVENTURER_ELITE", "detail": "on ambush: fight encounter chosen at setup, uniform miscRng.random(2) over THREE_SENTRIES / GREMLIN_NOB / LAGAVULIN_EVENT (Lagavulin starts awake)", "combatRewards": { "gold": { "rng": "miscRng", "min": 25, "max": 35, "bonus": "+30 per unclaimed gold reward remaining" }, "relic": "random tier (relicRng 50/33/17) if relic reward unclaimed", "cardReward": true, "potions": "standard roll" } }
+            { "effect": "startCombat", "amount": null, "id": "DEAD_ADVENTURER_ELITE", "detail": "on ambush: fight encounter chosen at setup, uniform miscRng.random(2) over THREE_SENTRIES / GREMLIN_NOB / LAGAVULIN_EVENT (Lagavulin starts awake); loot is set up BEFORE the fight (decompiled DeadAdventurer.java); EventRoom card odds (3/37), elite only for relic triggers", "combatRewards": { "gold": { "rng": "miscRng", "min": 25, "max": 35, "bonus": "+30 per unclaimed gold reward remaining", "timing": "rolled right after the ambush roll" }, "relic": "random tier (relicRng 50/33/17), plain returnRandomRelic (not screenless), if relic reward unclaimed", "cardReward": true, "potions": "standard roll" } }
           ],
           "random": { "rng": "miscRng", "roll": "ambush: random(99) < 25+25*priorSearches; setup: rewards shuffle + encounter random(2)" },
           "a15": { "detail": "base ambush chance 35 instead of 25 (35/60/85 by search)" }
@@ -158,7 +158,7 @@
         {
           "label": "Trap - Hide: lose 8% of max HP permanently",
           "requires": { "tookIdol": true },
-          "outcomes": [{ "effect": "loseMaxHp", "amount": "pct:0.08", "rounding": "floor", "id": null }],
+          "outcomes": [{ "effect": "loseMaxHp", "amount": "pct:0.08", "rounding": "floor", "id": null, "detail": "at least 1 (decompiled GoldenIdolEvent.java: if(maxHpLoss < 1) maxHpLoss = 1)" }],
           "random": null,
           "a15": { "amount": "pct:0.10" }
         }
@@ -291,7 +291,7 @@
           "label": "Stomp: fight 3 Fungi Beasts; victory adds Odd Mushroom and 20-30 gold to the rewards",
           "requires": null,
           "outcomes": [
-            { "effect": "startCombat", "amount": null, "id": "MUSHROOMS_EVENT", "combatRewards": { "gold": { "rng": "miscRng", "min": 20, "max": 30 }, "relic": "ODD_MUSHROOM", "cardReward": true, "potions": "standard roll" } }
+            { "effect": "startCombat", "amount": null, "id": "MUSHROOMS_EVENT", "combatRewards": { "gold": { "rng": "miscRng", "min": 20, "max": 30, "timing": "rolled before the fight (decompiled Mushrooms.java)" }, "relic": "ODD_MUSHROOM", "cardReward": true, "potions": "standard roll" } }
           ],
           "random": null,
           "a15": null
@@ -307,12 +307,11 @@
           "a15": null
         }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed's Eat branch (GameContext.cpp:3083-3085) grants 99 gold (50 at A15) instead of healing + Parasite; this contradicts spire-archive and wiki:Hypnotizing_Colored_Mushrooms and appears to be a copy-paste bug from The Nest. Corpus follows wiki/spire-archive."
+        "lightspeed's Eat branch (GameContext.cpp:3083-3085) grants 99 gold (50 at A15) instead of healing + Parasite; this contradicts spire-archive and wiki:Hypnotizing_Colored_Mushrooms and appears to be a copy-paste bug from The Nest. Corpus follows wiki/spire-archive, confirmed by decompiled Mushrooms.java (heal (int)(maxHealth * 0.25F) + Parasite, no A15 change)."
       ],
-      "needsJarVerification": ["Eat branch: confirm heal = floor(0.25 * maxHp) and Parasite grant; confirm no A15 change."],
-      "sources": ["GameContext.cpp:405-407,3069-3091", "spire-archive", "wiki:Hypnotizing_Colored_Mushrooms"]
+      "sources": ["GameContext.cpp:405-407,3069-3091", "spire-archive", "wiki:Hypnotizing_Colored_Mushrooms", "decompiled:events/exordium/Mushrooms.java"]
     },
     {
       "id": "SCRAP_OOZE",
@@ -327,20 +326,19 @@
           "label": "Reach inside (repeatable): take 3 damage; relic chance starts at 25% and rises 10% per attempt",
           "requires": null,
           "outcomes": [
-            { "effect": "loseHp", "kind": "damage", "amount": 3, "id": null },
+            { "effect": "loseHp", "kind": "damage", "amount": 3, "id": null, "detail": "+1 per missed reach (decompiled ScrapOoze.java: dmg++ on failure)" },
             { "effect": "obtainRelic", "amount": null, "id": "RANDOM", "detail": "on success: screenless relic, tier via relicRng 50/33/17; event ends. On failure: may try again or leave." }
           ],
-          "random": { "rng": "miscRng", "roll": "chance = 25 + 10*priorAttempts; lightspeed succeeds when random(99) >= 99 - chance (window of chance+1 values)" },
+          "random": { "rng": "miscRng", "roll": "chance = 25 + 10*priorAttempts; succeeds when random(99) >= 99 - chance (window of chance+1 values; decompiled ScrapOoze.java)" },
           "a15": { "loseHp": 5 }
         },
         { "label": "Leave: no effect", "requires": null, "outcomes": [], "random": null, "a15": null }
       ],
       "verified": true,
       "conflicts": [
-        "wiki states the success chance as exactly 25%/35%/45%...; lightspeed's formula (roll >= 99 - chance over 0..99) yields chance+1 percent. Off-by-one needs JAR confirmation."
+        "wiki states the success chance as exactly 25%/35%/45%...; the decompiled ScrapOoze.java compares random(0, 99) >= 99 - chance, which yields chance+1 percent (lightspeed agrees)."
       ],
-      "needsJarVerification": ["Exact success comparison in ScrapOoze.java (chance vs chance+1 percent)."],
-      "sources": ["GameContext.cpp:3179-3198", "spire-archive", "wiki:Events.lua"]
+      "sources": ["GameContext.cpp:3179-3198", "spire-archive", "wiki:Events.lua", "decompiled:events/exordium/ScrapOoze.java"]
     },
     {
       "id": "SHINING_LIGHT",
@@ -353,7 +351,7 @@
       "options": [
         {
           "label": "Enter: take damage equal to 20% of max HP; upgrade 2 random upgradeable cards (1 if only one exists)",
-          "requires": null,
+          "requires": { "upgradableCard": true },
           "outcomes": [
             { "effect": "loseHp", "kind": "damage", "amount": "pct:0.20", "rounding": "round", "id": null },
             { "effect": "upgradeCard", "amount": 2, "id": null, "detail": "upgradeable card indices shuffled with java shuffle seeded miscRng.randomLong(); first two upgraded" }
@@ -462,7 +460,7 @@
           "label": "Fight (forced): battle Blue Slaver + Red Slaver with no combat rewards",
           "requires": null,
           "outcomes": [
-            { "effect": "startCombat", "amount": null, "id": "COLOSSEUM_EVENT_SLAVERS", "combatRewards": null, "detail": "no rewards; potion drop chance still advances invisibly" }
+            { "effect": "startCombat", "amount": null, "id": "COLOSSEUM_EVENT_SLAVERS", "combatRewards": null, "detail": "no reward screen (rewardAllowed=false), but AbstractRoom still runs addPotionToRewards: a real potionRng roll that moves the pity either way; any drop is discarded" }
           ],
           "random": null,
           "a15": null
@@ -472,19 +470,17 @@
           "label": "Victory (after first fight): battle Taskmaster + Gremlin Nob; win 100 gold, a rare relic, an uncommon relic, and a card reward",
           "requires": { "wonFirstFight": true },
           "outcomes": [
-            { "effect": "startCombat", "amount": null, "id": "COLOSSEUM_EVENT_NOBS", "combatRewards": { "gold": 100, "relics": ["RANDOM_RARE", "RANDOM_UNCOMMON"], "cardReward": true, "potions": "standard roll", "note": "elite combat for most triggers; Black Star adds no extra relic" } }
+            { "effect": "startCombat", "amount": null, "id": "COLOSSEUM_EVENT_NOBS", "combatRewards": { "gold": 100, "relics": ["RANDOM_RARE", "RANDOM_UNCOMMON"], "cardReward": true, "potions": "standard roll", "note": "eliteTrigger for relic triggers; the EventRoom keeps its 3/37 card odds and has no Black Star drop" } }
           ],
           "random": null,
           "a15": null
         }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed does not implement this event (GameContext.cpp:2554-2556 is a stub; spawns are normally disabled via disableColosseum). All mechanics here are from wiki:The_Colosseum and spire-archive.",
-        "wiki flags The Colosseum as affected by Ascension 15 but documents no option changes; the A15 effect (if any) is unknown."
+        "lightspeed does not implement this event (GameContext.cpp:2554-2556 is a stub; spawns are normally disabled via disableColosseum). Mechanics follow the decompiled Colosseum.java (no A15 modifier)."
       ],
-      "needsJarVerification": ["Entire event flow, reward composition and ordering, and any A15 modifier in Colosseum.java."],
-      "sources": ["GameContext.cpp:421-422,2554-2556", "spire-archive", "wiki:The_Colosseum"]
+      "sources": ["GameContext.cpp:421-422,2554-2556", "spire-archive", "wiki:The_Colosseum", "decompiled:events/city/Colosseum.java"]
     },
     {
       "id": "CURSED_TOME",
@@ -510,7 +506,7 @@
             { "effect": "loseHp", "kind": "hpLoss", "amount": 10, "id": null },
             { "effect": "obtainRelic", "amount": null, "id": "RANDOM", "detail": "via reward screen" }
           ],
-          "random": { "rng": "miscRng", "roll": "random(2): 0=NECRONOMICON, 1=ENCHIRIDION, 2=NILRYS_CODEX" },
+          "random": { "rng": "miscRng", "roll": "random(n-1) over the books not already owned, in order NECRONOMICON, ENCHIRIDION, NILRYS_CODEX (CIRCLET if all owned; decompiled CursedTome.randomBook)" },
           "a15": { "loseHp": 15 }
         },
         {
@@ -537,8 +533,8 @@
         { "label": "Test J.A.X.: obtain the J.A.X. card", "requires": null, "outcomes": [{ "effect": "obtainCard", "amount": 1, "id": "JAX" }], "random": null, "a15": null },
         {
           "label": "Become test subject: transform 2 cards",
-          "requires": null,
-          "outcomes": [{ "effect": "transformCard", "amount": 2, "id": null }],
+          "requires": { "purgeableCards": 2, "note": "masterDeck.getPurgeableCards(): bottled cards count and can be picked (decompiled DrugDealer.java)" },
+          "outcomes": [{ "effect": "transformCard", "amount": 2, "id": null, "detail": "transformed one at a time in selection order" }],
           "random": { "rng": "miscRng", "roll": "transform results rolled with miscRng" },
           "a15": null
         },
@@ -623,16 +619,17 @@
           "label": "Fight: battle the bandits; victory yields Red Mask, 25-35 gold, and a card reward",
           "requires": null,
           "outcomes": [
-            { "effect": "startCombat", "amount": null, "id": "MASKED_BANDITS_EVENT", "combatRewards": { "gold": { "rng": "miscRng", "min": 25, "max": 35 }, "relic": "RED_MASK", "cardReward": true, "potions": "none in lightspeed reward list" } }
+            { "effect": "startCombat", "amount": null, "id": "MASKED_BANDITS_EVENT", "combatRewards": { "gold": { "rng": "miscRng", "min": 25, "max": 35, "timing": "rolled before the fight" }, "relic": "RED_MASK", "cardReward": true, "potions": "standard roll (EventRoom branch of addPotionToRewards)" } }
           ],
           "random": null,
           "a15": null
         }
       ],
       "verified": true,
-      "conflicts": [],
-      "needsJarVerification": ["Whether the bandit fight's reward screen includes a potion roll (lightspeed omits addPotionRewards here, unlike its other event fights)."],
-      "sources": ["GameContext.cpp:2987-3008", "spire-archive", "wiki:Events.lua"]
+      "conflicts": [
+        "lightspeed omits the potion roll here; the decompiled MaskedBandits.java fights in the EventRoom, whose AbstractRoom.update runs addPotionToRewards like every event fight."
+      ],
+      "sources": ["GameContext.cpp:2987-3008", "spire-archive", "wiki:Events.lua", "decompiled:events/city/MaskedBandits.java"]
     },
     {
       "id": "THE_NEST",
@@ -677,7 +674,7 @@
         {
           "label": "Read: choose 1 of 20 distinct class cards to obtain",
           "requires": null,
-          "outcomes": [{ "effect": "obtainCard", "amount": 1, "id": null, "detail": "20 unique cards, each rolled: rarity via event card-rarity roll, then class card of that rarity via cardRng; duplicates rerolled; list generated in reverse display order" }],
+          "outcomes": [{ "effect": "obtainCard", "amount": 1, "id": null, "detail": "20 unique cards, each rolled: rarity via event card-rarity roll, then class card of that rarity via cardRng; a duplicate re-rolls the rarity AND the card (decompiled TheLibrary.java); list generated in reverse display order" }],
           "random": { "rng": "cardRng", "roll": "20x (rollCardRarity(EVENT) then class card of rarity); uniqueness enforced" },
           "a15": null
         },
@@ -706,20 +703,19 @@
           "label": "Open coffin: obtain a random relic; 50% chance to also obtain the Writhe curse",
           "requires": null,
           "outcomes": [
-            { "effect": "obtainRelic", "amount": null, "id": "RANDOM", "detail": "random relic (wiki/spire-archive; missing from lightspeed - tier distribution unverified)" },
+            { "effect": "obtainRelic", "amount": null, "id": "RANDOM", "detail": "screenless relic, tier via relicRng 50/33/17 (decompiled TheMausoleum.java: returnRandomScreenlessRelic(returnRandomRelicTier()), granted after the curse roll)" },
             { "effect": "obtainCurse", "amount": 1, "id": "WRITHE", "detail": "only on failed 50% roll" }
           ],
-          "random": { "rng": "miscRng", "roll": "randomBoolean(): true => cursed (50%)" },
+          "random": { "rng": "miscRng", "roll": "randomBoolean(): true => cursed (50%); rolled even at A15, where the result is forced true" },
           "a15": { "detail": "curse is guaranteed" }
         },
         { "label": "Leave: no effect", "requires": null, "outcomes": [], "random": null, "a15": null }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed's handler (GameContext.cpp:3326-3341) only rolls the Writhe curse and never grants the relic; spire-archive and wiki agree Open Coffin yields a relic. Corpus includes the relic."
+        "lightspeed's handler (GameContext.cpp:3326-3341) only rolls the Writhe curse and never grants the relic; the decompiled TheMausoleum.java grants a screenless random relic too."
       ],
-      "needsJarVerification": ["Relic tier/pool used by TheMausoleum.java and the order of relic grant vs curse roll."],
-      "sources": ["GameContext.cpp:3326-3341", "spire-archive", "wiki:Events.lua"]
+      "sources": ["GameContext.cpp:3326-3341", "spire-archive", "wiki:Events.lua", "decompiled:events/city/TheMausoleum.java"]
     },
     {
       "id": "VAMPIRES",
@@ -731,17 +727,6 @@
       "summary": "A blood cult converts your starter Strikes into Bites for a price paid in max HP or a Blood Vial.",
       "options": [
         {
-          "label": "Offer Blood Vial: lose the Blood Vial relic; remove all starter Strikes; obtain 5 Bite cards",
-          "requires": { "hasRelic": "BLOOD_VIAL" },
-          "outcomes": [
-            { "effect": "other", "amount": null, "id": "BLOOD_VIAL", "detail": "BLOOD_VIAL relic removed" },
-            { "effect": "removeCard", "amount": null, "id": null, "detail": "all starter Strike cards (base Strikes only)" },
-            { "effect": "obtainCard", "amount": 5, "id": "BITE" }
-          ],
-          "random": null,
-          "a15": null
-        },
-        {
           "label": "Accept: lose 30% of max HP (capped at max HP - 1); remove all starter Strikes; obtain 5 Bite cards",
           "requires": null,
           "outcomes": [
@@ -752,11 +737,22 @@
           "random": null,
           "a15": null
         },
+        {
+          "label": "Offer Blood Vial: lose the Blood Vial relic; remove all starter Strikes; obtain 5 Bite cards",
+          "requires": { "hasRelic": "BLOOD_VIAL" },
+          "outcomes": [
+            { "effect": "other", "amount": null, "id": "BLOOD_VIAL", "detail": "BLOOD_VIAL relic removed" },
+            { "effect": "removeCard", "amount": null, "id": null, "detail": "all starter Strike cards (base Strikes only)" },
+            { "effect": "obtainCard", "amount": 5, "id": "BITE" }
+          ],
+          "random": null,
+          "a15": null
+        },
         { "label": "Refuse: no effect", "requires": null, "outcomes": [], "random": null, "a15": null }
       ],
       "verified": true,
       "conflicts": [],
-      "sources": ["GameContext.cpp:1029-1031,3460-3482", "spire-archive", "wiki:Events.lua"]
+      "sources": ["GameContext.cpp:1029-1031,3460-3482", "spire-archive", "wiki:Events.lua", "decompiled:events/city/Vampires.java (option order accept, vial, refuse)"]
     },
     {
       "id": "FALLING",
@@ -790,12 +786,11 @@
         },
         { "label": "Land on your head (only if no option is available): no card lost", "requires": { "noEligibleCards": true }, "outcomes": [], "random": null, "a15": null }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "The real game excludes bottled cards from Falling's selection; lightspeed marks this as a TODO (GameContext.cpp:886) and does not exclude them."
+        "The real game excludes bottled cards from Falling's selection (decompiled CardHelper.returnCardOfType uses getGroupWithoutBottledCards) and rolls the picks attack -> skill -> power (Falling.setCards); lightspeed marks the exclusion as a TODO (GameContext.cpp:886)."
       ],
-      "needsJarVerification": ["Bottled-card exclusion and behavior when all three card types are absent."],
-      "sources": ["GameContext.cpp:886-929,2757-2783", "spire-archive", "wiki:Events.lua"]
+      "sources": ["GameContext.cpp:886-929,2757-2783", "spire-archive", "wiki:Events.lua", "decompiled:events/beyond/Falling.java"]
     },
     {
       "id": "MINDBLOOM",
@@ -813,7 +808,7 @@
             { "effect": "startCombat", "amount": null, "id": "RANDOM_ACT1_BOSS", "detail": "uniform among THE_GUARDIAN / HEXAGHOST / SLIME_BOSS (java shuffle seeded miscRng.randomLong(), take first)", "combatRewards": { "gold": 50, "relic": "random RARE (relicRng)", "cardReward": true, "potions": "standard roll" } }
           ],
           "random": { "rng": "miscRng", "roll": "boss shuffle" },
-          "a15": { "gold": 25 }
+          "a15": { "gold": 25, "note": "the game already pays 25 from A13 (decompiled MindBloom.java: ascensionLevel >= 13)" }
         },
         {
           "label": "I am Awake: upgrade every upgradeable card; obtain Mark of the Bloom (can no longer heal)",
@@ -846,12 +841,11 @@
           "a15": null
         }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed offers all four options unconditionally; the real game shows I am Rich only on floors <= 40 and I am Healthy on floors >= 41 (wiki:Mind_Bloom)."
+        "lightspeed offers all four options unconditionally; the real game shows I am Rich only when floorNum % 50 <= 40 and I am Healthy otherwise (decompiled MindBloom.java)."
       ],
-      "needsJarVerification": ["Exact floor threshold comparison (<=40 vs <40) in MindBloom.java."],
-      "sources": ["GameContext.cpp:3015-3067", "spire-archive", "wiki:Mind_Bloom"]
+      "sources": ["GameContext.cpp:3015-3067", "spire-archive", "wiki:Mind_Bloom", "decompiled:events/beyond/MindBloom.java"]
     },
     {
       "id": "THE_MOAI_HEAD",
@@ -901,19 +895,18 @@
           "label": "Open sphere: fight 2 Orb Walkers; victory yields a rare relic, 45-55 gold, potions, and a card reward",
           "requires": null,
           "outcomes": [
-            { "effect": "startCombat", "amount": null, "id": "MYSTERIOUS_SPHERE_EVENT", "combatRewards": { "gold": { "rng": "miscRng", "min": 45, "max": 55 }, "relic": "random RARE (screenless)", "cardReward": true, "potions": "standard roll" } }
+            { "effect": "startCombat", "amount": null, "id": "MYSTERIOUS_SPHERE_EVENT", "combatRewards": { "gold": { "rng": "miscRng", "min": 45, "max": 55, "timing": "rolled before the fight" }, "relic": "random RARE (screenless)", "cardReward": true, "potions": "standard roll" } }
           ],
           "random": null,
           "a15": null
         },
         { "label": "Leave: no effect", "requires": null, "outcomes": [], "random": null, "a15": null }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed's Leave branch (GameContext.cpp:3104-3106) grants 99 gold (50 at A15); wiki:Mysterious_Sphere says leaving does nothing. Appears to be a copy-paste bug from The Nest; corpus follows wiki."
+        "lightspeed's Leave branch (GameContext.cpp:3104-3106) grants 99 gold (50 at A15); the decompiled MysteriousSphere.java leaves with no effect and has no A15 modifier."
       ],
-      "needsJarVerification": ["Confirm Leave grants nothing and there is no A15 modifier."],
-      "sources": ["GameContext.cpp:1180-1191,3093-3113", "spire-archive", "wiki:Mysterious_Sphere"]
+      "sources": ["GameContext.cpp:1180-1191,3093-3113", "spire-archive", "wiki:Mysterious_Sphere", "decompiled:events/beyond/MysteriousSphere.java"]
     },
     {
       "id": "SENSORY_STONE",
@@ -954,7 +947,8 @@
       ],
       "verified": true,
       "conflicts": [],
-      "sources": ["GameContext.cpp:3214-3231", "spire-archive", "wiki:Events.lua"]
+      "notes": "decompiled SensoryStone.java: the pick shuffles the memory texts (miscRng.randomLong), builds each RewardItem(COLORLESS) via getColorlessRewardCards (meta.colorlessRewards: 30% rare roll, no upgrades), and only then takes the 5 / 10 HP.",
+      "sources": ["GameContext.cpp:3214-3231", "spire-archive", "wiki:Events.lua", "decompiled:events/beyond/SensoryStone.java"]
     },
     {
       "id": "TOMB_OF_LORD_RED_MASK",
@@ -1045,12 +1039,12 @@
             { "effect": "obtainCard", "amount": null, "id": null, "detail": "pool = 2 copies each of 6 cards: random rare / uncommon / common class card (cardRng), uncommon colorless (colorless pool shuffled with shuffleRng), random curse (cardRng), class starter (BASH/NEUTRALIZE/ZAP/ERUPTION). Grid placement: indices [0..5,0..5] java-shuffled seeded miscRng.randomLong(); slot for shuffle position i is (i%3)*4 + (i%4)" }
           ],
           "random": { "rng": "cardRng+shuffleRng+miscRng", "roll": "card identities via cardRng (colorless via shuffleRng); board layout via miscRng.randomLong() seeded java shuffle" },
-          "a15": { "detail": "the uncommon colorless slot is replaced by a second random curse (cardRng)" }
+          "a15": { "detail": "the uncommon colorless slot is replaced by a second random curse (cardRng); a pair matches on equal card ids, so two curse slots that rolled the same curse match each other (decompiled GremlinMatchGame.java)" }
         }
       ],
       "verified": true,
       "conflicts": [],
-      "sources": ["GameContext.cpp:963-996,2403-2426", "spire-archive", "wiki:Match_and_Keep"]
+      "sources": ["GameContext.cpp:963-996,2403-2426", "spire-archive", "wiki:Match_and_Keep", "decompiled:events/shrines/GremlinMatchGame.java"]
     },
     {
       "id": "GOLDEN_SHRINE",
@@ -1206,7 +1200,7 @@
           "requires": null,
           "outcomes": [
             { "effect": "removeCard", "amount": 1, "id": null, "detail": "any non-bottled card that can be removed (canTransform)" },
-            { "effect": "other", "amount": null, "id": null, "detail": "by offered rarity: CURSE => obtain SPIRIT_POOP relic; BASIC => nothing; COMMON/SPECIAL => heal 5; UNCOMMON => heal 10; RARE => gain 10 max HP and heal to full" }
+            { "effect": "other", "amount": null, "id": null, "detail": "by offered rarity: CURSE => obtain SPIRIT_POOP relic; BASIC => nothing; COMMON/SPECIAL => heal 5; UNCOMMON => heal to full; RARE => gain 10 max HP and heal to full (decompiled Bonfire.setReward)" }
           ],
           "random": null,
           "a15": null
@@ -1230,17 +1224,17 @@
           "requires": { "minGold": 40 },
           "outcomes": [
             { "effect": "loseGold", "amount": 40, "id": null },
-            { "effect": "upgradeCard", "amount": null, "id": null, "detail": "variant A: choose 1 card to upgrade; variant B: 2 random cards upgraded (miscRng)" }
+            { "effect": "upgradeCard", "amount": null, "id": null, "detail": "variant A: choose 1 card to upgrade; variant B: the upgradable cards are java-shuffled (miscRng.randomLong()) and the first 2 upgraded" }
           ],
           "random": { "rng": "miscRng", "roll": "setup: randomBoolean() picks upgrade variant; separate randomBoolean() picks clean-up variant" },
           "a15": { "loseGold": 50, "requires": { "minGold": 50 } }
         },
         {
-          "label": "Clean up: pay 60 gold; remove a chosen card OR transform 2 random cards (variant rolled at setup)",
+          "label": "Clean up: pay 60 gold; remove a chosen card OR transform 2 chosen cards (variant rolled at setup)",
           "requires": { "minGold": 60 },
           "outcomes": [
             { "effect": "loseGold", "amount": 60, "id": null },
-            { "effect": "other", "amount": null, "id": null, "detail": "variant A: choose 1 card to remove; variant B: 2 random cards transformed (miscRng)" }
+            { "effect": "other", "amount": null, "id": null, "detail": "variant A: choose 1 card to remove; variant B: choose 2 cards, transformed in selection order (miscRng); needs 2 unbottled cards" }
           ],
           "random": { "rng": "miscRng", "roll": "variant fixed at event setup" },
           "a15": { "loseGold": 75, "requires": { "minGold": 75 } }
@@ -1251,7 +1245,7 @@
           "outcomes": [
             { "effect": "loseGold", "amount": 90, "id": null },
             { "effect": "removeCard", "amount": 1, "id": null },
-            { "effect": "upgradeCard", "amount": 1, "id": null, "detail": "random card (miscRng)" }
+            { "effect": "upgradeCard", "amount": 1, "id": null, "detail": "the upgradable cards are java-shuffled (miscRng.randomLong()) after the removal; the first is upgraded" }
           ],
           "random": { "rng": "miscRng", "roll": "random upgrade target" },
           "a15": { "loseGold": 110, "requires": { "minGold": 110 } }
@@ -1264,12 +1258,11 @@
           "a15": { "amount": 5 }
         }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed's handler (GameContext.cpp:2657-2696) has missing break statements (case 3 falls into case 4 into case 5) and charges no gold for the upgrade-2-random variant; costs/variants here follow wiki:Designer_In-Spire, which matches lightspeed's intact branches (40/50, 60/75, 90/110, punch 3/5)."
+        "lightspeed's handler (GameContext.cpp:2657-2696) has missing break statements (case 3 falls into case 4 into case 5) and charges no gold for the upgrade-2-random variant; the decompiled Designer.java confirms 40/50, 60/75, 90/110, punch 3/5, that both clean-up variants open a card-select grid (1 to remove or 2 to transform), and that each service is disabled below its cost."
       ],
-      "needsJarVerification": ["Which select screens are player-choice vs random per variant, and per-option gold gating when below a service's cost."],
-      "sources": ["GameContext.cpp:374-375,877-880,2657-2696", "spire-archive", "wiki:Designer_In-Spire"]
+      "sources": ["GameContext.cpp:374-375,877-880,2657-2696", "spire-archive", "wiki:Designer_In-Spire", "decompiled:events/shrines/Designer.java"]
     },
     {
       "id": "DUPLICATOR",
@@ -1329,7 +1322,7 @@
       "name": "The Divine Fountain",
       "pool": "oneTime",
       "acts": [1, 2, 3],
-      "canSpawn": { "deckHasCurse": true },
+      "canSpawn": { "deckHasCurse": true, "note": "AbstractPlayer.isCursed: ASCENDERS_BANE, NECRONOMICURSE and CURSE_OF_THE_BELL do not count" },
       "summary": "Sacred water washes away every removable curse.",
       "options": [
         {
@@ -1357,10 +1350,20 @@
       "summary": "A flaming skull sells gold, a colorless card, or a potion for HP; each purchase raises that item's price.",
       "options": [
         {
+          "label": "A pick me up: lose X HP, obtain a random potion (repeatable; X rises 1 per purchase; works even with full slots, potion lost)",
+          "requires": null,
+          "outcomes": [
+            { "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "X = 6 + timesThisOptionChosen" },
+            { "effect": "obtainPotion", "amount": 1, "id": null, "detail": "PotionHelper.getRandomPotion(): uniform potionRng pick over the class potion list, no rarity roll; Sozu skips it" }
+          ],
+          "random": { "rng": "potionRng", "roll": "random potion" },
+          "a15": null
+        },
+        {
           "label": "Riches: lose X HP, gain 90 gold (repeatable; X rises 1 per purchase of this option)",
           "requires": null,
           "outcomes": [
-            { "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "X = max(6, floor(0.10*maxHp)) + timesThisOptionChosen" },
+            { "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "X = 6 + timesThisOptionChosen" },
             { "effect": "gainGold", "amount": 90, "id": null }
           ],
           "random": null,
@@ -1370,36 +1373,25 @@
           "label": "Success: lose X HP, obtain a random uncommon colorless card (repeatable; X rises 1 per purchase)",
           "requires": null,
           "outcomes": [
-            { "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "X = max(6, floor(0.10*maxHp)) + timesThisOptionChosen" },
-            { "effect": "obtainCard", "amount": 1, "id": null, "detail": "uncommon colorless; lightspeed: colorless pool shuffled with shuffleRng, first uncommon taken" }
+            { "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "X = 6 + timesThisOptionChosen" },
+            { "effect": "obtainCard", "amount": 1, "id": null, "detail": "uncommon colorless: colorless pool shuffled with shuffleRng, first uncommon taken (AbstractDungeon.returnColorlessCard)" }
           ],
           "random": { "rng": "shuffleRng", "roll": "colorless pool shuffle" },
           "a15": null
         },
         {
-          "label": "A pick me up: lose X HP, obtain a random potion (repeatable; X rises 1 per purchase; works even with full slots, potion lost)",
+          "label": "How do I leave: lose 6 HP (no increment), event ends",
           "requires": null,
-          "outcomes": [
-            { "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "X = max(6, floor(0.10*maxHp)) + timesThisOptionChosen" },
-            { "effect": "obtainPotion", "amount": 1, "id": null, "detail": "random potion via potionRng" }
-          ],
-          "random": { "rng": "potionRng", "roll": "random potion" },
-          "a15": null
-        },
-        {
-          "label": "How do I leave: lose base X HP (no increment), event ends",
-          "requires": null,
-          "outcomes": [{ "effect": "loseHp", "kind": "hpLoss", "amount": null, "id": null, "detail": "base X = max(6, floor(0.10*maxHp)); lightspeed hardcodes 6" }],
+          "outcomes": [{ "effect": "loseHp", "kind": "hpLoss", "amount": 6, "id": null }],
           "random": null,
           "a15": null
         }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed uses a flat base cost of 6 HP for every option (GameContext.cpp:944-948); wiki:Knowing_Skull says base X = 10% of max HP with a minimum of 6. Corpus follows wiki; the two agree only when maxHp <= ~69."
+        "wiki:Knowing_Skull says base X = 10% of max HP with a minimum of 6; the decompiled KnowingSkull.java (and lightspeed, GameContext.cpp:944-948) start every ware and the exit at a flat 6 (leaveCost = 6; cardCost = potionCost = goldCost = leaveCost). The game lists potion, gold, card, leave."
       ],
-      "needsJarVerification": ["Base cost formula/rounding in KnowingSkull.java and whether the leave cost also scales with prior purchases."],
-      "sources": ["GameContext.cpp:383-384,944-948,2920-2946", "spire-archive", "wiki:Knowing_Skull"]
+      "sources": ["GameContext.cpp:383-384,944-948,2920-2946", "spire-archive", "wiki:Knowing_Skull", "decompiled:events/city/KnowingSkull.java"]
     },
     {
       "id": "LAB",
@@ -1413,7 +1405,7 @@
         {
           "label": "Search (automatic): receive 3 random potions via the reward screen",
           "requires": null,
-          "outcomes": [{ "effect": "obtainPotion", "amount": 3, "id": null, "detail": "each rolled with potionRng" }],
+          "outcomes": [{ "effect": "obtainPotion", "amount": 3, "id": null, "detail": "each PotionHelper.getRandomPotion(): uniform potionRng pick over the class potion list, no rarity roll (decompiled Lab.java)" }],
           "random": { "rng": "potionRng", "roll": "3 independent random potions (2 at A15+)" },
           "a15": { "obtainPotion": 2 }
         }
@@ -1634,12 +1626,11 @@
           "a15": { "outcomes": [{ "effect": "loseHp", "kind": "hpLoss", "amount": "pct:0.05", "rounding": "ceil", "id": null }] }
         }
       ],
-      "verified": false,
+      "verified": true,
       "conflicts": [
-        "lightspeed's purchase branches (GameContext.cpp:3374-3407) never deduct gold; spire-archive and wiki agree the purchases cost 20/30/40 gold. Corpus includes the costs."
+        "lightspeed's purchase branches (GameContext.cpp:3374-3407) never deduct gold; the decompiled WomanInBlue.java charges 20/30/40 gold (the spawn needs 50, so every purchase is affordable) and rolls each potion with PotionHelper.getRandomPotion(): a uniform potionRng pick over the class potion list, no rarity roll."
       ],
-      "needsJarVerification": ["Gold costs and whether purchase options are gated by current gold in TheWomanInBlue.java."],
-      "sources": ["GameContext.cpp:392-393,1025-1027,3374-3407", "spire-archive", "wiki:Events.lua"]
+      "sources": ["GameContext.cpp:392-393,1025-1027,3374-3407", "spire-archive", "wiki:Events.lua", "decompiled:events/shrines/WomanInBlue.java"]
     }
   ]
 }

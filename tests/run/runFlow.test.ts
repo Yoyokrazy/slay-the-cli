@@ -36,6 +36,10 @@ const parasiteBundle = makeRunTestBundle();
 const parasiteDef = curseCards.find((c) => c.id === "PARASITE");
 if (!parasiteDef) throw new Error("missing PARASITE card def");
 parasiteBundle.cards.set(parasiteDef.id, parasiteDef);
+// a second obtainable curse: a transformed curse becomes a different curse
+const regretDef = curseCards.find((c) => c.id === "REGRET");
+if (!regretDef) throw new Error("missing REGRET card def");
+parasiteBundle.cards.set(regretDef.id, regretDef);
 const eggBundle = makeRunTestBundle();
 for (const id of ["FROZEN_EGG", "MOLTEN_EGG", "TOXIC_EGG"] as const) {
   const def = allRelics.find((r) => r.id === id);
@@ -361,6 +365,8 @@ describe("master deck removal hooks", () => {
     expect(s.run.hp).toBe(77);
     expect(s.run.deck).toHaveLength(2);
     expect(s.run.deck.some((c) => c.defId === "PARASITE")).toBe(false);
+    // AbstractDungeon.transformCard: a curse transforms into another curse
+    expect(s.run.deck.map((c) => c.defId)).toEqual(["T_DEFEND", "REGRET"]);
   });
 
   test("removing a normal card leaves max HP unchanged", () => {
@@ -708,6 +714,40 @@ describe("? room resolution", () => {
     migrateLegacyRunState(s.run);
     expect("tinyChestCounter" in s.run.history).toBe(false);
     expect(s.run.relics.some((r) => r.defId === "TINY_CHEST")).toBe(false);
+  });
+
+  test("Tiny Chest: the forced chest leaves the same eventRng position as an unforced roll", () => {
+    const a = freshCtx("TINY2");
+    const b = freshCtx("TINY2");
+    a.s.run.relics.push({ defId: "TINY_CHEST", counter: 3 });
+    resolveUnknownRoom(a.ctx);
+    resolveUnknownRoom(b.ctx);
+    expect(a.registry.get("eventRng").saveState()).toEqual(b.registry.get("eventRng").saveState());
+  });
+
+  test("slot 99 overflow: once monster + shop cover the table, a 0.99+ roll lands on TREASURE", () => {
+    // EventHelper.roll fills possibleResults with Arrays.fill(min(99, i),
+    // min(100, i + size)): every fill after the index passes 99 rewrites slot 99
+    let found = false;
+    for (let i = 0; i < 4000 && !found; i++) {
+      const seed = `OVF${i}`;
+      const probe = freshCtx(seed);
+      const roll = probe.registry.get("eventRng").randomFloat();
+      if (Math.trunc(Math.fround(roll * 100)) !== 99) continue;
+      found = true;
+      const { s, ctx } = freshCtx(seed);
+      s.run.blizzard.monsterChance = 1.0;
+      expect(resolveUnknownRoom(ctx)).toBe("treasure");
+      const { s: s2, ctx: ctx2 } = freshCtx(seed);
+      s2.run.blizzard.monsterChance = 0.9;
+      s2.run.blizzard.shopChance = 0.3; // 90 + 30 overflows too
+      expect(resolveUnknownRoom(ctx2)).toBe("treasure");
+      const { s: s3, ctx: ctx3 } = freshCtx(seed);
+      s3.run.blizzard.monsterChance = 1.0;
+      s3.run.history.lastRoomWasShop = true; // a 0-size shop fill still rewrites slot 99
+      expect(resolveUnknownRoom(ctx3)).toBe("treasure");
+    }
+    expect(found).toBe(true);
   });
 
   test("Juzu Bracelet converts MONSTER to EVENT (monster chance still resets)", () => {

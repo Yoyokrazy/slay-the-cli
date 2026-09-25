@@ -2,9 +2,7 @@
 // pool at ascension >= 15) - data/corpus/events.json is the spec.
 
 import type { EventDef, EffectCtx } from "../../engine/content/defs";
-import type { RewardEntry } from "../../engine/run/runState";
 import type { RelicId } from "../../engine/core/ids";
-import { returnRandomPotion } from "../../engine/run/rewards";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
 import {
   a15,
@@ -33,8 +31,10 @@ import {
   removeRelic,
   requestDeckChoice,
   screenlessRandomRelic,
+  shuffledUpgradeableIndices,
   simpleEvent,
-  transformDeckCard,
+  transformDeckCardsInOrder,
+  uniformPotionRewards,
   upgradeableIndices,
   upgradeDeckCard,
   CURSE_IDS,
@@ -86,12 +86,15 @@ const bonfireSpirits: EventDef = simpleEvent({
     if (idx !== undefined && ctx.run.deck[idx]) {
       const def = ctx.bundle.cards.get(ctx.run.deck[idx]!.defId);
       removeDeckCards(ctx, [idx]);
+      // Bonfire.setReward switches on the offered card's RARITY: curse ->
+      // Spirit Poop (Circlet if owned), basic -> nothing, common/special ->
+      // heal 5, uncommon -> heal to full, rare -> +10 max HP and heal to full
       if (def) {
-        if (def.type === "curse") obtainRelic(ctx, "SPIRIT_POOP");
+        if (def.rarity === "curse") obtainRelic(ctx, hasRelic(ctx.run, "SPIRIT_POOP") ? "CIRCLET" : "SPIRIT_POOP");
         else if (def.rarity === "basic") {
           // nothing
         } else if (def.rarity === "common" || def.rarity === "special") healHp(ctx, 5);
-        else if (def.rarity === "uncommon") healHp(ctx, 10);
+        else if (def.rarity === "uncommon") healToFull(ctx);
         else if (def.rarity === "rare") {
           gainMaxHp(ctx, 10);
           healToFull(ctx);
@@ -119,7 +122,7 @@ const designerInSpire: EventDef = {
     const misc = ctx.rng("miscRng");
     const d = dataOf(ctx);
     d.upgradeChoice = misc.randomBoolean(); // true: choose 1; false: 2 random
-    d.cleanupChoice = misc.randomBoolean(); // true: choose 1 removal; false: transform 2 random
+    d.cleanupChoice = misc.randomBoolean(); // true: choose 1 removal; false: choose 2 to transform
   },
   build: (ctx) => {
     const costs = designerCosts(ctx);
@@ -136,11 +139,9 @@ const designerInSpire: EventDef = {
             if (peekData(c).upgradeChoice) {
               requestDeckChoice(c, { tag: "upgrade1", indices: upgradeableIndices(c), min: 1, max: 1, reason: "event:designer" });
             } else {
-              for (let k = 0; k < 2; k++) {
-                const pool = upgradeableIndices(c);
-                if (pool.length === 0) break;
-                upgradeDeckCard(c, pool[c.rng("miscRng").random(pool.length - 1)]!);
-              }
+              // Designer.upgradeTwoRandomCards: shuffle the upgradable cards
+              // (miscRng.randomLong) and upgrade the first two
+              for (const i of shuffledUpgradeableIndices(c).slice(0, 2)) upgradeDeckCard(c, i);
               endEvent(c);
             }
           },
@@ -149,21 +150,18 @@ const designerInSpire: EventDef = {
         option(
           d.cleanupChoice
             ? `Clean up: pay ${costs.clean} gold; remove a chosen card`
-            : `Clean up: pay ${costs.clean} gold; transform 2 random cards`,
+            : `Clean up: pay ${costs.clean} gold; transform 2 chosen cards`,
           (c) => {
             loseGold(c, costs.clean);
+            // Designer.java: both variants open a grid over the purgeable,
+            // unbottled cards - pick 1 to remove, or pick 2 to transform
             if (peekData(c).cleanupChoice) {
               requestDeckChoice(c, { tag: "remove1", indices: removableIndices(c), min: 1, max: 1, reason: "event:designer" });
             } else {
-              for (let k = 0; k < 2; k++) {
-                const pool = removableIndices(c);
-                if (pool.length === 0) break;
-                transformDeckCard(c, pool[c.rng("miscRng").random(pool.length - 1)]!);
-              }
-              endEvent(c);
+              requestDeckChoice(c, { tag: "transform2", indices: removableIndices(c), min: 2, max: 2, reason: "event:designer" });
             }
           },
-          (c) => c.run.gold >= costs.clean && removableIndices(c).length > 0,
+          (c) => c.run.gold >= costs.clean && removableIndices(c).length >= (peekData(c).cleanupChoice ? 1 : 2),
         ),
         option(
           `Full service: pay ${costs.full} gold; remove a chosen card, then upgrade a random card`,
@@ -182,14 +180,20 @@ const designerInSpire: EventDef = {
     };
   },
   onResume: (ctx, tag, chosen) => {
+    if (tag === "transform2") {
+      transformDeckCardsInOrder(ctx, chosen);
+      endEvent(ctx);
+      return;
+    }
     const idx = chosen[0];
     if (idx !== undefined) {
       if (tag === "upgrade1") upgradeDeckCard(ctx, idx);
       else if (tag === "remove1") removeDeckCards(ctx, [idx]);
       else if (tag === "fullService") {
         removeDeckCards(ctx, [idx]);
-        const pool = upgradeableIndices(ctx);
-        if (pool.length > 0) upgradeDeckCard(ctx, pool[ctx.rng("miscRng").random(pool.length - 1)]!);
+        // then shuffle the upgradable cards (miscRng.randomLong) and upgrade the first
+        const pool = shuffledUpgradeableIndices(ctx);
+        if (pool.length > 0) upgradeDeckCard(ctx, pool[0]!);
       }
     }
     endEvent(ctx);
@@ -257,8 +261,9 @@ const divineFountain: EventDef = simpleEvent({
   id: "THE_DIVINE_FOUNTAIN",
   name: "The Divine Fountain",
   pool: "oneTime",
-  // any curse qualifies the spawn (even unremovable ones, like the reference)
-  canSpawn: (run) => run.deck.some((mc) => CURSE_IDS.has(mc.defId)),
+  // AbstractPlayer.isCursed (AbstractPlayer.java:926-939): a curse other than
+  // Necronomicurse / Curse of the Bell / Ascender's Bane qualifies the spawn
+  canSpawn: (run) => run.deck.some((mc) => CURSE_IDS.has(mc.defId) && !UNREMOVABLE_CURSES.includes(mc.defId)),
   summary: "Sacred water washes away every removable curse.",
   options: () => [
     option("Drink: remove all removable curses from your deck", (ctx) => {
@@ -277,7 +282,10 @@ const divineFountain: EventDef = simpleEvent({
 
 // --- Knowing Skull ------------------------------------------------------------------------------------
 
-const skullBase = (ctx: EffectCtx): number => Math.max(6, fractionMaxHp(ctx, 0.1, "floor"));
+/** KnowingSkull.java: every ware and the exit start at a flat 6 HP
+ *  (leaveCost = 6; cardCost = potionCost = goldCost = leaveCost); each
+ *  purchase raises that ware's price by 1, the exit stays 6. */
+const SKULL_BASE_COST = 6;
 
 const knowingSkull: EventDef = {
   id: "KNOWING_SKULL",
@@ -289,18 +297,22 @@ const knowingSkull: EventDef = {
   },
   build: (ctx) => {
     const d = peekData(ctx);
-    const base = skullBase(ctx);
-    const cost = (key: string): number => base + ((d[key] as number) ?? 0);
+    const cost = (key: string): number => SKULL_BASE_COST + ((d[key] as number) ?? 0);
     const pay = (c: EffectCtx, key: string): boolean => {
       const dd = dataOf(c);
-      const price = skullBase(c) + ((dd[key] as number) ?? 0);
+      const price = SKULL_BASE_COST + ((dd[key] as number) ?? 0);
       dd[key] = ((dd[key] as number) ?? 0) + 1;
       loseHp(c, price);
       return c.run.hp > 0;
     };
+    // the game's order: potion, gold, card, leave
     return {
       summary: "A flaming skull sells gold, a colorless card, or a potion for HP; each purchase raises that item's price.",
       options: [
+        option(`A pick me up: lose ${cost("potion")} HP, obtain a random potion (repeatable; lost if slots are full)`, (c) => {
+          if (!pay(c, "potion")) return;
+          grantPotionDirect(c);
+        }),
         option(`Riches: lose ${cost("riches")} HP, gain 90 gold (repeatable)`, (c) => {
           if (!pay(c, "riches")) return;
           gainGold(c, 90);
@@ -310,12 +322,8 @@ const knowingSkull: EventDef = {
           const id = colorlessViaShuffle(c, "uncommon");
           if (id) obtainCard(c, id);
         }),
-        option(`A pick me up: lose ${cost("potion")} HP, obtain a random potion (repeatable; lost if slots are full)`, (c) => {
-          if (!pay(c, "potion")) return;
-          grantPotionDirect(c);
-        }),
-        option(`How do I leave: lose ${skullBase(ctx)} HP, event ends`, (c) => {
-          loseHp(c, skullBase(c));
+        option(`How do I leave: lose ${SKULL_BASE_COST} HP, event ends`, (c) => {
+          loseHp(c, SKULL_BASE_COST);
           if (c.run.hp <= 0) return;
           endEvent(c);
         }),
@@ -333,13 +341,9 @@ const lab: EventDef = simpleEvent({
   summary: "An alchemy lab hands over free potions, no choice involved.",
   options: () => [
     option("Search: receive 3 random potions (2 at A15+) via the reward screen", (ctx) => {
-      const n = a15(ctx) ? 2 : 3;
-      const entries: RewardEntry[] = [];
-      for (let i = 0; i < n; i++) {
-        const id = returnRandomPotion(ctx);
-        if (id) entries.push({ kind: "potion", id, taken: false });
-      }
-      openRewards(ctx, entries);
+      // Lab.java: RewardItem(PotionHelper.getRandomPotion()) x2, +1 below A15
+      // - uniform potionRng picks, no rarity roll
+      openRewards(ctx, uniformPotionRewards(ctx, a15(ctx) ? 2 : 3));
     }),
   ],
 });
@@ -420,8 +424,9 @@ const secretPortal: EventDef = simpleEvent({
   id: "SECRET_PORTAL",
   name: "Secret Portal",
   pool: "oneTime",
-  // playtime >= 800s is a wall-clock gate the deterministic engine cannot see;
-  // the reference abstracts it as !speedrunPace, which we model as always-open.
+  // ENGINE-GAP: the game also requires CardCrawlGame.playtime >= 800s
+  // (AbstractDungeon.getShrine); the deterministic engine has no wall clock,
+  // so the gate is modeled as always open.
   canSpawn: (run) => run.act === 3,
   summary: "A portal offers an instant jump to the Act 3 boss, skipping every floor between.",
   options: () => [
@@ -548,12 +553,9 @@ const womanInBlue: EventDef = simpleEvent({
         `Buy ${count} potion${count > 1 ? "s" : ""}: pay ${cost} gold`,
         (ctx) => {
           loseGold(ctx, cost);
-          const entries: RewardEntry[] = [];
-          for (let i = 0; i < count; i++) {
-            const id = returnRandomPotion(ctx);
-            if (id) entries.push({ kind: "potion", id, taken: false });
-          }
-          openRewards(ctx, entries);
+          // WomanInBlue.java: RewardItem(PotionHelper.getRandomPotion()) per
+          // potion - uniform potionRng picks, no rarity roll
+          openRewards(ctx, uniformPotionRewards(ctx, count));
         },
         (ctx) => ctx.run.gold >= cost,
       );

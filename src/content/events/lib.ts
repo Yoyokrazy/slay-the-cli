@@ -10,8 +10,10 @@
 //  - "screenless" random relics roll tier with relicRng (50/33/17) and pop the
 //    run-start shuffled pool, rerolling BOTTLED_* / WHETSTONE (corpus
 //    events.json meta note); popped rerolls are consumed, like the reference.
-//  - out-of-run-layer death: hp<=0 sets rt.combatOver="defeat", which game.ts
-//    finish() turns into outcome=death + gameOver room.
+//  - out-of-run-layer death: at hp<=0 a Fairy in a Bottle, else an unused
+//    Lizard Tail, saves the player (AbstractPlayer.damage runs in events too;
+//    Mark of the Bloom blocks both); otherwise rt.combatOver="defeat", which
+//    game.ts finish() turns into outcome=death + gameOver room.
 
 import type { EffectCtx, EventDef, EventOption, MasterDeckRemovalReason } from "../../engine/content/defs";
 import type { RewardEntry, EventRoomData, MasterCard, RoomState } from "../../engine/run/runState";
@@ -25,19 +27,17 @@ import {
   canObtainPotions,
   cardGroupEntries,
   cardRewardSize,
-  classCardPool,
   colorlessCardPool,
   combatRelicTier,
   createCardReward,
   hasRelic,
   nextRewardGroup,
   obtainRelicFromPool,
-  returnRandomPotion,
+  potionPool,
   rollPotionReward,
   withGoldenIdolBonus,
   CARD_REWARD,
   COLORLESS_RARE_CHANCE,
-  type RewardRoomKind,
   type RolledCard,
 } from "../../engine/run/rewards";
 import { canSmith } from "../../engine/run/rest";
@@ -90,8 +90,34 @@ export function fractionMaxHp(ctx: EffectCtx, fraction: number, rounding: Roundi
 function afterHpLoss(ctx: EffectCtx): void {
   if (ctx.run.hp <= 0) {
     ctx.run.hp = 0;
+    if (eventDeathSave(ctx)) return;
     ctx.rt.combatOver = "defeat"; // finish() -> outcome death + gameOver room
   }
+}
+
+/** AbstractPlayer.damage at 0 HP, in or out of combat: unless Mark of the
+ *  Bloom is owned, a Fairy in a Bottle heals (int)(maxHealth * potency%), min 1
+ *  (FairyPotion.use), else an unused Lizard Tail heals maxHealth / 2, min 1
+ *  (LizardTail.onTrigger). */
+function eventDeathSave(ctx: EffectCtx): boolean {
+  const run = ctx.run;
+  if (hasRelic(run, "MARK_OF_THE_BLOOM")) return false;
+  const slot = run.potions.indexOf("FAIRY_POTION");
+  if (slot !== -1) {
+    const def = ctx.bundle.potions.get("FAIRY_POTION");
+    const bark = def?.sacredBarkDoubles === true && hasRelic(run, "SACRED_BARK");
+    const potency = (def?.potency ?? 30) * (bark ? 2 : 1);
+    run.potions[slot] = null;
+    healHp(ctx, Math.max(1, fractionMaxHp(ctx, potency / 100, "floor")));
+    return true;
+  }
+  const tail = run.relics.find((r) => r.defId === "LIZARD_TAIL");
+  if (tail && tail.counter === 0) {
+    tail.counter = 1; // used up
+    healHp(ctx, Math.max(1, Math.floor(run.maxHp / 2)));
+    return true;
+  }
+  return false;
 }
 
 /** Event damage (lightspeed damagePlayer) - folds onLoseHp (Tungsten Rod). */
@@ -168,8 +194,9 @@ export function removeDeckCards(ctx: EffectCtx, indices: number[], reason: Maste
   removeMasterDeckCards(ctx, indices, reason);
 }
 
-/** Transform: remove, then roll the replacement uniformly over the class pool
- *  (all rarities) with miscRng - identical to runFlow's runDeckChoiceResume. */
+/** Transform: remove, then roll the replacement with miscRng from the pool
+ *  matching the removed card's color, excluding the card itself (deck.ts
+ *  transformPool) - identical to runFlow's runDeckChoiceResume. */
 export function transformDeckCard(ctx: EffectCtx, deckIdx: number, reason: MasterDeckRemovalReason = "event:transform"): void {
   transformMasterDeckCard(ctx, deckIdx, 0, reason);
 }
@@ -183,6 +210,16 @@ export function upgradeableIndices(ctx: EffectCtx): number[] {
   return ctx.run.deck.map((_, i) => i).filter((i) => canSmith(ctx, i));
 }
 
+/** The upgradable deck cards in deck order, Collections.shuffle'd with a
+ *  java.util.Random seeded by miscRng.randomLong() - the game's "upgrade N
+ *  random cards" (Shining Light, Designer). The long is drawn even when
+ *  nothing is upgradable. */
+export function shuffledUpgradeableIndices(ctx: EffectCtx): number[] {
+  const idxs = upgradeableIndices(ctx);
+  javaShuffle(idxs, new JavaRandom(ctx.rng("miscRng").randomLong()));
+  return idxs;
+}
+
 /** Cards a removal/transform screen may target: non-bottled, not an
  *  unremovable special curse. */
 export function removableIndices(ctx: EffectCtx): number[] {
@@ -192,6 +229,23 @@ export function removableIndices(ctx: EffectCtx): number[] {
       const mc = ctx.run.deck[i]!;
       return !mc.bottled && !UNREMOVABLE_CURSES.includes(mc.defId);
     });
+}
+
+/** CardGroup.getPurgeableCards without the bottled filter: everything but the
+ *  unremovable special curses (Augmenter's transform screen). */
+export function purgeableIndices(ctx: EffectCtx): number[] {
+  return ctx.run.deck.map((_, i) => i).filter((i) => !UNREMOVABLE_CURSES.includes(ctx.run.deck[i]!.defId));
+}
+
+/** Transform several picked cards one at a time in the order they were
+ *  selected (gridSelectScreen.selectedCards order), like DrugDealer/Designer.
+ *  Each replacement appends, so the picks are tracked by identity. */
+export function transformDeckCardsInOrder(ctx: EffectCtx, indices: number[]): void {
+  const picked = [...new Set(indices)].map((i) => ctx.run.deck[i]).filter((mc): mc is MasterCard => mc !== undefined);
+  for (const mc of picked) {
+    const idx = ctx.run.deck.indexOf(mc);
+    if (idx !== -1) transformDeckCard(ctx, idx);
+  }
 }
 
 export function deckIndicesOfType(ctx: EffectCtx, type: "attack" | "skill" | "power"): number[] {
@@ -293,13 +347,42 @@ export function screenlessRandomRelic(ctx: EffectCtx): RelicId {
   return screenlessRelicOfTier(ctx, tier === "boss" || tier === "shop" ? "rare" : tier);
 }
 
+/** AbstractDungeon.returnRandomRelic(returnRandomRelicTier()): the same relicRng
+ *  tier roll, then a plain pool pop - bottles and Whetstone are NOT rerolled
+ *  (AbstractRoom.addRelicToRewards(tier), Dead Adventurer's ambush loot). */
+export function randomRelic(ctx: EffectCtx): RelicId {
+  return obtainRelicFromPool(ctx, combatRelicTier(ctx));
+}
+
 // --- potions -------------------------------------------------------------------------
 
-/** Grant a rolled potion directly; lost when the belt is full (Knowing Skull).
- *  KnowingSkull.java:226-234 checks Sozu itself, before any roll. */
+/** PotionHelper.getRandomPotion (PotionHelper.java:162-166): uniform over the
+ *  class + shared potion list with potionRng - no rarity roll. Rolls even with
+ *  Sozu (callers decide what a Sozu owner keeps). */
+export function uniformRandomPotion(ctx: EffectCtx): PotionId | null {
+  const pool = potionPool(ctx);
+  if (pool.length === 0) return null;
+  return pool[ctx.rng("potionRng").random(pool.length - 1)]!;
+}
+
+/** Reward-screen potions rolled with PotionHelper.getRandomPotion (Lab, The
+ *  Woman in Blue): every roll is made; a Sozu owner's rewards vanish on claim
+ *  in the game (RewardItem.claimReward), so they are not listed here. */
+export function uniformPotionRewards(ctx: EffectCtx, count: number): RewardEntry[] {
+  const entries: RewardEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    const id = uniformRandomPotion(ctx);
+    if (id && canObtainPotions(ctx.run)) entries.push({ kind: "potion", id, taken: false });
+  }
+  return entries;
+}
+
+/** Knowing Skull's potion (KnowingSkull.java:226-234): Sozu is checked before
+ *  any roll; otherwise one uniform potion, lost when the belt is full
+ *  (AbstractPlayer.obtainPotion). */
 export function grantPotionDirect(ctx: EffectCtx): PotionId | null {
   if (!canObtainPotions(ctx.run)) return null;
-  const id = returnRandomPotion(ctx);
+  const id = uniformRandomPotion(ctx);
   if (id) {
     const slot = ctx.run.potions.indexOf(null);
     if (slot !== -1) ctx.run.potions[slot] = id;
@@ -315,18 +398,21 @@ export function openRewards(ctx: EffectCtx, entries: RewardEntry[]): void {
 
 /** Assemble an event-combat rewards screen in the standard order
  *  (gold -> relics -> potion roll -> card group), same as buildCombatRewards.
- *  The gold is the event's addGoldToRewards total, so the RewardItem's Golden
- *  Idol bonus applies (RewardItem.java:160-163: every gold reward outside a
- *  TreasureRoom). The fight happens in the EventRoom, so its card reward rolls
- *  the plain 3/37 rarity even for elite fights (eliteTrigger only feeds
- *  relics): `cardRoom` is "event" there. */
+ *  Event fights stay in the EventRoom, so:
+ *  - gold is the event's addGoldToRewards total, a RewardItem(gold): Golden
+ *    Idol adds round(25%) like any reward gold outside a treasure room
+ *    (RewardItem.java:160-163);
+ *  - the potion roll uses the EventRoom 40% + pity branch;
+ *  - `cardReward` rolls the room's base 3/37 odds (AbstractRoom.java:164-165),
+ *    even for elite-trigger fights (Dead Adventurer, Colosseum Nobs):
+ *    eliteTrigger only feeds relics. */
 export function eventCombatRewards(
   ctx: EffectCtx,
   opts: {
     gold?: number;
     relics?: RelicId[];
     potionRoll?: boolean;
-    cardRoom?: RewardRoomKind;
+    cardReward?: boolean;
     extraCardGroups?: RolledCard[][];
   },
 ): RewardEntry[] {
@@ -339,8 +425,8 @@ export function eventCombatRewards(
     const p = rollPotionReward(ctx, entries.length);
     if (p) entries.push({ kind: "potion", id: p, taken: false });
   }
-  if (opts.cardRoom) {
-    for (const e of cardGroupEntries(createCardReward(ctx, opts.cardRoom))) entries.push(e);
+  if (opts.cardReward) {
+    for (const e of cardGroupEntries(createCardReward(ctx, "event"))) entries.push(e);
   }
   for (const group of opts.extraCardGroups ?? []) {
     const g = nextRewardGroup(entries);

@@ -2,6 +2,7 @@
 
 import type { EventDef, EffectCtx } from "../../engine/content/defs";
 import { JavaRandom, javaShuffle } from "../../engine/core/rng";
+import { obtainRelicFromPool } from "../../engine/run/rewards";
 import {
   a15,
   cardName,
@@ -49,16 +50,17 @@ const falling: EventDef = {
   name: "Falling",
   pool: "act3",
   onEnter: (ctx) => {
-    // one uniform miscRng pick per card type present, in option order
-    // (skill, power, attack). Bottled cards are NOT excluded (reference TODO).
+    // Falling.setCards: one uniform miscRng pick per card type present, rolled
+    // attack -> skill -> power (the options still list skill, power, attack),
+    // over the master deck WITHOUT bottled cards (CardHelper.returnCardOfType)
     const d = dataOf(ctx);
     const misc = ctx.rng("miscRng");
     for (const [key, type] of [
+      ["attackIdx", "attack"],
       ["skillIdx", "skill"],
       ["powerIdx", "power"],
-      ["attackIdx", "attack"],
     ] as const) {
-      const idxs = deckIndicesOfType(ctx, type);
+      const idxs = deckIndicesOfType(ctx, type).filter((i) => !ctx.run.deck[i]!.bottled);
       if (idxs.length > 0) d[key] = idxs[misc.random(idxs.length - 1)]!;
     }
   },
@@ -137,8 +139,10 @@ const mindbloom: EventDef = {
     ],
   }),
   onCombatVictory: (ctx) => {
-    const gold = a15(ctx) ? 25 : 50;
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: [screenlessRelicOfTier(ctx, "rare")], potionRoll: true, cardRoom: "monster" }));
+    // MindBloom.java: 25 gold from A13 (ascensionLevel >= 13), else 50, and
+    // addRelicToRewards(RARE) - a plain rare pool pop
+    const gold = ctx.asc >= 13 ? 25 : 50;
+    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: [obtainRelicFromPool(ctx, "rare")], potionRoll: true, cardReward: true }));
   },
 };
 
@@ -183,27 +187,37 @@ const mysteriousSphere: EventDef = {
       combatOption(
         combatPendingLabel(ctx, "Open sphere: fight 2 Orb Walkers; victory yields a rare relic, 45-55 gold, and a card reward", SPHERE_MONSTERS),
         SPHERE_MONSTERS,
-        // not an elite combat for relic triggers (corpus note)
-        (c, svc) => svc.startCombat({ encounterId: "MYSTERIOUS_SPHERE_EVENT", monsters: SPHERE_MONSTERS, roomKind: "monster" }),
+        // not an elite combat for relic triggers (no eliteTrigger); the 45-55
+        // gold is added to the room's rewards (miscRng) before enterCombat
+        (c, svc) => {
+          dataOf(c).gold = c.rng("miscRng").randomRange(45, 55);
+          svc.startCombat({ encounterId: "MYSTERIOUS_SPHERE_EVENT", monsters: SPHERE_MONSTERS, roomKind: "monster" });
+        },
       ),
       leaveOption(),
     ],
   }),
-  onCombatVictory: (ctx) => {
-    const gold = ctx.rng("miscRng").randomRange(45, 55);
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: [screenlessRelicOfTier(ctx, "rare")], potionRoll: true, cardRoom: "monster" }));
+  onCombatVictory: (ctx, _encounterId, data) => {
+    // a save from before the gold was pre-rolled rolls it now, the same way
+    const pre = (data as Record<string, unknown> | undefined)?.gold;
+    const gold = typeof pre === "number" ? pre : ctx.rng("miscRng").randomRange(45, 55);
+    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: [screenlessRelicOfTier(ctx, "rare")], potionRoll: true, cardReward: true }));
   },
 };
 
 // --- Sensory Stone ----------------------------------------------------------------------------
 
+/** SensoryStone.java: the pick first shuffles the memory texts
+ *  (miscRng.randomLong), then builds N RewardItem(COLORLESS) rewards, THEN
+ *  takes the 5 / 10 HP_LOSS. */
 function sensoryRecall(ctx: EffectCtx, hpCost: number, rewards: number): void {
+  ctx.rng("miscRng").randomLong();
+  const groups = [];
+  for (let i = 0; i < rewards; i++) groups.push(createColorlessCardReward(ctx));
   if (hpCost > 0) {
     loseHp(ctx, hpCost);
     if (ctx.run.hp <= 0) return;
   }
-  const groups = [];
-  for (let i = 0; i < rewards; i++) groups.push(createColorlessCardReward(ctx));
   openRewards(ctx, eventCombatRewards(ctx, { extraCardGroups: groups }));
 }
 

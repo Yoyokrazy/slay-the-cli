@@ -154,15 +154,20 @@ describe("run deck choice mapping", () => {
   });
 
   test("Augmenter multi-transform changes only the two selected deck cards across pages", () => {
+    // DrugDealer lists masterDeck.getPurgeableCards() - bottled cards included -
+    // so every one of the 27 cards is a candidate and page 2 key 0 is deck 19
     const game = eventChoice("AUGMENTER", 1);
+    const request = game.pending!.request;
+    if (request.kind !== "cards") throw new Error("expected card choice");
+    expect(request.iids).toEqual(game.run.deck.map((_, i) => i));
     let ui = pressUi(game, freshUi(), ch("n"));
     ui = pressUi(game, ui, ch("0"));
     ui = pressUi(game, ui, ch("p"));
-    ui = pressUi(game, ui, ch("1"));
+    ui = pressUi(game, ui, ch("2"));
     const action = mapKey(ENTER, buildView(game, ui, bundle));
-    expectChoose(action, [25, 1]);
+    expectChoose(action, [19, 1]);
     const result = choose(game, action);
-    expect(result.run.deck.slice(0, -2)).toEqual(game.run.deck.filter((_, i) => i !== 1 && i !== 25));
+    expect(result.run.deck.slice(0, -2)).toEqual(game.run.deck.filter((_, i) => i !== 1 && i !== 19));
     expect(result.run.deck).toHaveLength(game.run.deck.length);
   });
 

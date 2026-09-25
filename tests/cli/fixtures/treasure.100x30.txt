@@ -1,4 +1,4 @@
- HP 51/80 | G 64 | F9 A1 | ASC0 | K:--- | POT --- | DECK 9 | REL 3 | Ironclad | FXTREASURE8         
+ HP 45/80 | G 64 | F9 A1 | ASC0 | K:--- | POT --- | DECK 9 | REL 3 | Ironclad | FXTREASURE8         
 -- SMALL CHEST -------------------------------------------------------------------------------------
                                                                                                     
                                                                                                     

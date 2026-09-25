@@ -23,12 +23,14 @@ import {
   openRewards,
   option,
   peekData,
+  randomRelic,
   removableIndices,
   removeDeckCards,
   requestDeckChoice,
   screenOf,
   screenlessRandomRelic,
   setScreen,
+  shuffledUpgradeableIndices,
   simpleEvent,
   transformDeckCard,
   upgradeableIndices,
@@ -44,7 +46,8 @@ const bigFish: EventDef = simpleEvent({
   summary: "Three dangling baits offer a heal, max HP, or a cursed relic box; one must be picked.",
   options: () => [
     option("Banana: heal 1/3 of max HP", (ctx) => {
-      healHp(ctx, fractionMaxHp(ctx, 0.3333, "floor"));
+      // BigFish.java: healAmt = maxHealth / 3 (integer division)
+      healHp(ctx, Math.floor(ctx.run.maxHp / 3));
       endEvent(ctx);
     }),
     option("Donut: gain 5 max HP", (ctx) => {
@@ -52,6 +55,10 @@ const bigFish: EventDef = simpleEvent({
       endEvent(ctx);
     }),
     option("Box: obtain a random relic and the Regret curse", (ctx) => {
+      // ENGINE-GAP: the game builds the Regret's ShowCardAndObtainEffect (the
+      // Omamori veto) BEFORE this relic is obtained and adds the card after;
+      // obtainCard here vetoes and adds in one step, so a freshly rolled Omamori
+      // already negates the Regret.
       obtainRelic(ctx, screenlessRandomRelic(ctx));
       obtainCard(ctx, "REGRET");
       endEvent(ctx);
@@ -107,6 +114,10 @@ interface DeadAdventurerData {
   rewards: ("GOLD" | "NOTHING" | "RELIC")[];
   encounter: string;
   phase: number;
+  /** ambush loot, rolled before the fight like DeadAdventurer.java's
+   *  addGoldToRewards(miscRng.random(25, 35)) + addRelicToRewards(tier) */
+  ambushGold?: number;
+  ambushRelic?: string | null;
 }
 
 const deadAdventurerData = (d: unknown): DeadAdventurerData => d as DeadAdventurerData;
@@ -140,7 +151,14 @@ const deadAdventurer: EventDef = {
             const dd = deadAdventurerData(dataOf(ctx2));
             const base = a15(ctx2) ? 35 : 25;
             const chance = base + 25 * dd.phase;
-            if (ctx2.rng("miscRng").random(99) < chance) {
+            const misc = ctx2.rng("miscRng");
+            if (misc.random(99) < chance) {
+              // the ambush loot is set up before the fight: 25-35 gold on the
+              // floor's miscRng right away, +30 per unclaimed GOLD, and a plain
+              // (not screenless) random relic for an unclaimed RELIC
+              const remaining = dd.rewards.slice(dd.phase);
+              dd.ambushGold = misc.randomRange(25, 35) + 30 * remaining.filter((r) => r === "GOLD").length;
+              dd.ambushRelic = remaining.includes("RELIC") ? randomRelic(ctx2) : null;
               svc.startCombat({
                 encounterId: dd.encounter,
                 monsters: DEAD_ADVENTURER_ENCOUNTERS[dd.encounter]!.monsters,
@@ -162,10 +180,23 @@ const deadAdventurer: EventDef = {
   },
   onCombatVictory: (ctx, _encounterId, data) => {
     const d = deadAdventurerData(data);
-    const remaining = d.rewards.slice(d.phase);
-    const gold = ctx.rng("miscRng").randomRange(25, 35) + 30 * remaining.filter((r) => r === "GOLD").length;
-    const relics = remaining.includes("RELIC") ? [screenlessRandomRelic(ctx)] : [];
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics, potionRoll: true, cardRoom: "event" }));
+    if (d.ambushGold === undefined) {
+      // a save from before the loot was pre-rolled: roll it now, the same way
+      const remaining = d.rewards.slice(d.phase);
+      d.ambushGold = ctx.rng("miscRng").randomRange(25, 35) + 30 * remaining.filter((r) => r === "GOLD").length;
+      d.ambushRelic = remaining.includes("RELIC") ? randomRelic(ctx) : null;
+    }
+    // the fight happens in the EventRoom: elite for relic triggers
+    // (eliteTrigger), but the card reward keeps the room's base odds
+    openRewards(
+      ctx,
+      eventCombatRewards(ctx, {
+        gold: d.ambushGold,
+        relics: d.ambushRelic ? [d.ambushRelic] : [],
+        potionRoll: true,
+        cardReward: true,
+      }),
+    );
   },
 };
 
@@ -206,9 +237,9 @@ const goldenIdol: EventDef = {
           () => trap,
         ),
         option(
-          "Trap - Hide: lose 8% of max HP permanently (10% at A15+)",
+          "Trap - Hide: lose 8% of max HP permanently (10% at A15+; at least 1)",
           (c) => {
-            loseMaxHp(c, fractionMaxHp(c, a15(c) ? 0.1 : 0.08, "floor"));
+            loseMaxHp(c, Math.max(1, fractionMaxHp(c, a15(c) ? 0.1 : 0.08, "floor")));
             endEvent(c);
           },
           () => trap,
@@ -350,7 +381,12 @@ const mushrooms: EventDef = {
       combatOption(
         combatPendingLabel(ctx, "Stomp: fight 3 Fungi Beasts; victory adds Odd Mushroom and 20-30 gold", MUSHROOM_MONSTERS),
         MUSHROOM_MONSTERS,
-        (c, svc) => svc.startCombat({ encounterId: "MUSHROOMS_EVENT", monsters: MUSHROOM_MONSTERS, roomKind: "monster" }),
+        (c, svc) => {
+          // Mushrooms.java: the 20-30 gold is added to the room's rewards
+          // (miscRng) before the fight starts
+          dataOf(c).gold = c.rng("miscRng").randomRange(20, 30);
+          svc.startCombat({ encounterId: "MUSHROOMS_EVENT", monsters: MUSHROOM_MONSTERS, roomKind: "monster" });
+        },
       ),
       option("Eat: heal 25% of max HP, obtain the Parasite curse", (c) => {
         healHp(c, fractionMaxHp(c, 0.25, "floor"));
@@ -359,9 +395,11 @@ const mushrooms: EventDef = {
       }),
     ],
   }),
-  onCombatVictory: (ctx) => {
-    const gold = ctx.rng("miscRng").randomRange(20, 30);
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: ["ODD_MUSHROOM"], potionRoll: true, cardRoom: "monster" }));
+  onCombatVictory: (ctx, _encounterId, data) => {
+    // a save from before the gold was pre-rolled rolls it now, the same way
+    const pre = (data as Record<string, unknown> | undefined)?.gold;
+    const gold = typeof pre === "number" ? pre : ctx.rng("miscRng").randomRange(20, 30);
+    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: ["ODD_MUSHROOM"], potionRoll: true, cardReward: true }));
   },
 };
 
@@ -374,30 +412,39 @@ const scrapOoze: EventDef = {
   onEnter: (ctx) => {
     dataOf(ctx).attempts = 0;
   },
-  build: (ctx) => ({
-    summary: "Reaching into a scrap-filled ooze costs HP per attempt with a rising chance to pull out a relic.",
-    options: [
-      option(
-        `Reach inside: take ${a15(ctx) ? 5 : 3} damage; relic chance starts at 25% and rises 10% per attempt`,
-        (c) => {
-          damagePlayer(c, a15(c) ? 5 : 3);
-          if (c.run.hp <= 0) return;
-          const d = dataOf(c);
-          const attempts = (d.attempts as number) ?? 0;
-          const chance = 25 + 10 * attempts;
-          // lightspeed: success when random(99) >= 99 - chance
-          if (c.rng("miscRng").random(99) >= 99 - chance) {
-            obtainRelic(c, screenlessRandomRelic(c));
-            endEvent(c);
-          } else {
-            d.attempts = attempts + 1;
-          }
-        },
-      ),
-      leaveOption(),
-    ],
-  }),
+  build: (ctx) => {
+    const attempts = (peekData(ctx).attempts as number | undefined) ?? 0;
+    return {
+      summary: "Reaching into a scrap-filled ooze costs HP per attempt with a rising chance to pull out a relic.",
+      options: [
+        option(
+          `Reach inside: take ${scrapOozeDamage(ctx, attempts)} damage; ${25 + 10 * attempts}% chance of a relic (each miss adds 1 damage and 10%)`,
+          (c) => {
+            const d = dataOf(c);
+            const tries = (d.attempts as number) ?? 0;
+            damagePlayer(c, scrapOozeDamage(c, tries));
+            if (c.run.hp <= 0) return;
+            const chance = 25 + 10 * tries;
+            // ScrapOoze.java: success when miscRng.random(0, 99) >= 99 - chance;
+            // a miss raises the chance by 10 AND the damage by 1 (dmg++)
+            if (c.rng("miscRng").random(99) >= 99 - chance) {
+              obtainRelic(c, screenlessRandomRelic(c));
+              endEvent(c);
+            } else {
+              d.attempts = tries + 1;
+            }
+          },
+        ),
+        leaveOption(),
+      ],
+    };
+  },
 };
+
+/** ScrapOoze.java: 3 damage (5 at A15+), +1 per missed reach. */
+function scrapOozeDamage(ctx: EffectCtx, attempts: number): number {
+  return (a15(ctx) ? 5 : 3) + attempts;
+}
 
 // --- Shining Light -----------------------------------------------------------------------------------------
 
@@ -407,13 +454,16 @@ const shiningLight: EventDef = simpleEvent({
   pool: "act1",
   summary: "A glowing light upgrades random cards in exchange for a chunk of HP.",
   options: () => [
-    option("Enter: take 20% of max HP as damage (30% at A15+); upgrade 2 random upgradeable cards", (ctx) => {
-      damagePlayer(ctx, fractionMaxHp(ctx, a15(ctx) ? 0.3 : 0.2, "round"));
-      const idxs = upgradeableIndices(ctx);
-      javaShuffle(idxs, new JavaRandom(ctx.rng("miscRng").randomLong()));
-      for (const i of idxs.slice(0, 2)) upgradeDeckCard(ctx, i);
-      endEvent(ctx);
-    }),
+    option(
+      "Enter: take 20% of max HP as damage (30% at A15+); upgrade 2 random upgradeable cards",
+      (ctx) => {
+        damagePlayer(ctx, fractionMaxHp(ctx, a15(ctx) ? 0.3 : 0.2, "round"));
+        for (const i of shuffledUpgradeableIndices(ctx).slice(0, 2)) upgradeDeckCard(ctx, i);
+        endEvent(ctx);
+      },
+      // ShiningLight.java: the option is disabled without an upgradable card
+      (ctx) => upgradeableIndices(ctx).length > 0,
+    ),
     leaveOption(),
   ],
 });

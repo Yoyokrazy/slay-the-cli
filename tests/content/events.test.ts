@@ -8,10 +8,14 @@ import { createRun, advance, type GameState } from "../../src/engine/game";
 import { buildBaseContentBundle } from "../../src/content/index";
 import { makeTestCtx } from "../run/runCtx";
 import { RngRegistry } from "../../src/engine/core/rngRegistry";
-import { Rng } from "../../src/engine/core/rng";
+import { JavaRandom, Rng, javaShuffle } from "../../src/engine/core/rng";
 import { classCardPool } from "../../src/engine/run/rewards";
 import type { EventRoomData, RoomState } from "../../src/engine/run/runState";
+import { createCardReward, CARD_REWARD, COLORLESS_RARE_CHANCE } from "../../src/engine/run/rewards";
+import { transformDeckCard } from "../../src/engine/run/deck";
+import { eventCombatRewards } from "../../src/content/events/lib";
 import eventsCorpus from "../../data/corpus/events.json";
+import metaCorpus from "../../data/corpus/meta.json";
 
 const bundle = buildBaseContentBundle();
 
@@ -293,13 +297,16 @@ describe("act 1 events", () => {
     if (combat.kind !== "combat") throw new Error("expected combat");
     expect(combat.encounterId).toBe("MUSHROOMS_EVENT");
     expect(s.combat!.monsters.map((m) => m.id)).toEqual(["FUNGI_BEAST", "FUNGI_BEAST", "FUNGI_BEAST"]);
+    // Mushrooms.java rolls the gold (miscRng) before enterCombat
+    const preRolled = (combat.eventCombat?.data as EventRoomData | undefined)?.gold as number;
+    expect(preRolled).toBeGreaterThanOrEqual(20);
+    expect(preRolled).toBeLessThanOrEqual(30);
     s = winCombat(s);
     const rw = roomOf(s);
     if (rw.kind !== "rewards") throw new Error("expected rewards");
     const gold = rw.entries.find((en) => en.kind === "gold");
     if (!gold || gold.kind !== "gold") throw new Error("no gold");
-    expect(gold.amount).toBeGreaterThanOrEqual(20);
-    expect(gold.amount).toBeLessThanOrEqual(30);
+    expect(gold.amount).toBe(preRolled);
     expect(rw.entries.some((en) => en.kind === "relic" && en.id === "ODD_MUSHROOM")).toBe(true);
     expect(rw.entries.filter((en) => en.kind === "card").length).toBe(3);
     s = advance(s, { cmd: "skipRewards" }, bundle);
@@ -307,7 +314,7 @@ describe("act 1 events", () => {
     expect(s.combat).toBeNull();
   });
 
-  test("Scrap Ooze: 3 damage per reach (5 at A15); success grants a relic and ends", () => {
+  test("Scrap Ooze: 3 damage (5 at A15), +1 damage and +10% per miss; success grants a relic and ends", () => {
     let s = forceEvent("SO1", "SCRAP_OOZE");
     let reaches = 0;
     while (roomOf(s).kind === "event" && reaches < 20) {
@@ -316,12 +323,35 @@ describe("act 1 events", () => {
     }
     expect(roomOf(s).kind).toBe("map");
     expect(s.run.relics.length).toBe(2);
-    expect(s.run.hp).toBe(80 - 3 * reaches);
+    // ScrapOoze.java dmg++ on every miss: 3 + 4 + ... over the reaches
+    let expectedLoss = 0;
+    for (let k = 0; k < reaches; k++) expectedLoss += 3 + k;
+    expect(s.run.hp).toBe(80 - expectedLoss);
 
     let a = forceEvent("SO2", "SCRAP_OOZE", { ascension: 15 });
     const hpBefore = a.run.hp;
     a = pick(a, 0);
     expect(a.run.hp).toBe(hpBefore - 5);
+    if (roomOf(a).kind === "event") {
+      a = pick(a, 0); // a missed first reach makes the second one cost 6
+      expect(a.run.hp).toBe(hpBefore - 5 - 6);
+    }
+  });
+
+  test("Scrap Ooze: the reach cost shown and paid climbs with each miss", () => {
+    for (let i = 0; i < 40; i++) {
+      let s = forceEvent(`SOM${i}`, "SCRAP_OOZE", { mutate: boost });
+      s = pick(s, 0);
+      if (roomOf(s).kind !== "event") continue; // first reach succeeded
+      expect(dataOf(s).attempts).toBe(1);
+      const { ctx } = makeTestCtx(s, bundle);
+      expect(bundle.events.get("SCRAP_OOZE")!.build(ctx).options[0]!.label).toContain("take 4 damage; 35% chance");
+      const hp = s.run.hp;
+      s = pick(s, 0);
+      expect(s.run.hp).toBe(hp - 4);
+      return;
+    }
+    throw new Error("no missed first reach in 40 seeds");
   });
 
   test("Shining Light: round(20% maxHp) damage and 2 random upgrades (30% at A15)", () => {
@@ -329,6 +359,16 @@ describe("act 1 events", () => {
     s = pick(s, 0);
     expect(s.run.hp).toBe(80 - 16);
     expect(s.run.deck.reduce((n, c) => n + c.upgrades, 0)).toBe(2);
+  });
+
+  test("Shining Light: entering is disabled without an upgradable card", () => {
+    const s = forceEvent("SL2", "SHINING_LIGHT", {
+      mutate: (g) => {
+        for (const c of g.run.deck) c.upgrades = 1;
+      },
+    });
+    expect(() => pick(s, 0)).toThrow("unavailable");
+    expect(roomOf(pick(s, 1)).kind).toBe("map");
   });
 });
 
@@ -380,9 +420,10 @@ describe("act 2 events", () => {
     if (back.kind !== "event") throw new Error("expected event screen after fight 1");
     expect(back.screen).toBe("wonFirst");
     // rewardAllowed = false hides the screen, not addPotionToRewards: the roll
-    // is consumed and the pity moves either way
+    // is consumed and the pity moves either way; whatever dropped is discarded
     expect(s.rng.run.potionRng.counter).toBeGreaterThan(potionRngBefore);
     expect(Math.abs(s.run.blizzard.potionChance - pityBefore)).toBe(10);
+    expect(s.run.potions.every((p) => p === null)).toBe(true);
     expect(() => pick(s, 0)).toThrow("unavailable"); // no re-fighting the slavers
 
     const fled = pick(s, 1);
@@ -450,6 +491,30 @@ describe("act 2 events", () => {
     expect(deckIds(t).filter((id) => id === "STRIKE_RED").length).toBe(4);
     expect(deckIds(t).filter((id) => id === "DEFEND_RED").length).toBe(3);
 
+    // DrugDealer.java: the transform needs 2+ purgeable cards, bottled ones
+    // included, and takes exactly 2
+    const one = forceEvent("AU4", "AUGMENTER", {
+      mutate: (g) => {
+        g.run.deck = [
+          { defId: "STRIKE_RED", upgrades: 0, misc: 0, bottled: false },
+          { defId: "ASCENDERS_BANE", upgrades: 0, misc: 0, bottled: false },
+        ];
+      },
+    });
+    expect(() => pick(one, 1)).toThrow("unavailable");
+    const bottled = forceEvent("AU5", "AUGMENTER", {
+      mutate: (g) => {
+        g.run.deck = [
+          { defId: "STRIKE_RED", upgrades: 0, misc: 0, bottled: true },
+          { defId: "BASH", upgrades: 0, misc: 0, bottled: false },
+        ];
+      },
+    });
+    const req = pick(bottled, 1).pending!.request;
+    if (req.kind !== "cards") throw new Error("expected a card pick");
+    expect(req.iids).toEqual([0, 1]);
+    expect([req.min, req.max]).toEqual([2, 2]);
+
     let m = forceEvent("AU3", "AUGMENTER");
     m = pick(m, 2);
     expect(relicIds(m)).toContain("MUTAGENIC_STRENGTH");
@@ -497,17 +562,25 @@ describe("act 2 events", () => {
       return;
     }
     f = pick(f, 1);
-    expect(roomOf(f).kind).toBe("combat");
+    const fight = roomOf(f);
+    if (fight.kind !== "combat") throw new Error("expected combat");
+    // MaskedBandits.java rolls the 25-35 gold (miscRng) before enterCombat
+    const preRolled = (fight.eventCombat?.data as EventRoomData | undefined)?.gold as number;
+    expect(preRolled).toBeGreaterThanOrEqual(25);
+    expect(preRolled).toBeLessThanOrEqual(35);
     const pityBefore = f.run.blizzard.potionChance;
     const potionRngBefore = f.rng.run.potionRng.counter;
     f = winCombat(f);
     const rw = roomOf(f);
     if (rw.kind !== "rewards") throw new Error("expected rewards");
     expect(rw.entries.some((e) => e.kind === "relic" && e.id === "RED_MASK")).toBe(true);
+    const gold = rw.entries.find((e) => e.kind === "gold");
+    expect(gold && gold.kind === "gold" ? gold.amount : -1).toBe(preRolled);
     // the EventRoom still runs addPotionToRewards (40 + blizzardPotionMod)
     expect(f.rng.run.potionRng.counter).toBeGreaterThan(potionRngBefore);
     const dropped = rw.entries.some((e) => e.kind === "potion");
     expect(f.run.blizzard.potionChance).toBe(pityBefore + (dropped ? -10 : 10));
+    expect(rw.entries.filter((e) => e.kind === "card").length).toBe(3);
   });
 
   test("The Nest: 99 gold (50 at A15) or 6 damage + Ritual Dagger", () => {
@@ -558,16 +631,17 @@ describe("act 2 events", () => {
   });
 
   test("Vampires: strikes out, 5 Bites in; Blood Vial spares the max HP", () => {
+    // Vampires.java option order: accept (0), Blood Vial (1), refuse (2)
     let s = forceEvent("VA1", "VAMPIRES");
-    expect(() => pick(s, 0)).toThrow("unavailable"); // no Blood Vial
-    s = pick(s, 1);
+    expect(() => pick(s, 1)).toThrow("unavailable"); // no Blood Vial
+    s = pick(s, 0);
     expect(s.run.maxHp).toBe(80 - 24); // ceil(80*0.3)
     expect(deckIds(s).filter((id) => id === "STRIKE_RED").length).toBe(0);
     expect(deckIds(s).filter((id) => id === "BITE").length).toBe(5);
     expect(s.run.deck.length).toBe(10);
 
     let v = forceEvent("VA2", "VAMPIRES", { mutate: (g) => g.run.relics.push({ defId: "BLOOD_VIAL", counter: 0 }) });
-    v = pick(v, 0);
+    v = pick(v, 1);
     expect(v.run.maxHp).toBe(80);
     expect(relicIds(v)).not.toContain("BLOOD_VIAL");
     expect(deckIds(v).filter((id) => id === "BITE").length).toBe(5);
@@ -927,6 +1001,14 @@ describe("one-time events", () => {
     });
     common = choose(pick(common, 0), [10]);
     expect(common.run.hp).toBe(45);
+
+    // Bonfire.setReward: UNCOMMON heals to full (heal(maxHealth))
+    let uncommon = forceEvent("BS5", "BONFIRE_SPIRITS", {
+      mutate: (g) => ((g.run.hp = 40), g.run.deck.push({ defId: "CARNAGE", upgrades: 0, misc: 0, bottled: false })),
+    });
+    uncommon = choose(pick(uncommon, 0), [10]);
+    expect(uncommon.run.hp).toBe(80);
+    expect(uncommon.run.maxHp).toBe(80);
   });
 
   test("Designer In-Spire: setup-rolled variants; punch costs 3 (5 at A15); gold gating", () => {
@@ -959,6 +1041,49 @@ describe("one-time events", () => {
     const poor = forceEvent("DS5", "DESIGNER_IN_SPIRE", { mutate: (g) => (g.run.gold = 30) });
     expect(() => pick(poor, 0)).toThrow("unavailable");
     expect(() => pick(poor, 2)).toThrow("unavailable");
+  });
+
+  test("Designer In-Spire: the transform clean-up is a pick of 2 cards; random upgrades use a miscRng-seeded shuffle", () => {
+    // Designer.java: cleanUpRemovesCards=false opens a 2-card grid (a choice,
+    // not random); upgradeTwoRandomCards and the full service upgrade shuffle
+    // the upgradable cards with java.util.Random(miscRng.randomLong())
+    const forced = (seed: string, upgradeChoice: boolean, cleanupChoice: boolean): GameState => {
+      const s = forceEvent(seed, "DESIGNER_IN_SPIRE", { mutate: (g) => (g.run.gold = 500) });
+      Object.assign(dataOf(s), { upgradeChoice, cleanupChoice });
+      return s;
+    };
+    const t = pick(forced("DS6", true, false), 1);
+    expect(t.run.gold).toBe(440);
+    const req = t.pending!.request;
+    if (req.kind !== "cards") throw new Error("expected a card pick");
+    expect([req.min, req.max]).toEqual([2, 2]);
+    const done = choose(t, [9, 0]); // BASH first, then a Strike
+    expect(done.run.deck.length).toBe(10);
+    expect(deckIds(done).slice(0, 8)).toEqual(deckIds(t).slice(1, 9));
+    expect(deckIds(done)).not.toContain("BASH");
+    expect(roomOf(done).kind).toBe("map");
+
+    const shuffleOrder = (s: GameState): number[] => {
+      const reg = RngRegistry.fromState(s.rng);
+      const idxs = s.run.deck.map((_, i) => i);
+      javaShuffle(idxs, new JavaRandom(reg.get("miscRng").randomLong()));
+      return idxs;
+    };
+    const two = forced("DS7", false, true);
+    const order = shuffleOrder(two);
+    const upgraded = pick(two, 0);
+    expect(upgraded.run.deck.map((c, i) => (c.upgrades > 0 ? i : -1)).filter((i) => i !== -1).sort()).toEqual(
+      order.slice(0, 2).sort(),
+    );
+
+    const full = forced("DS8", true, true);
+    const afterPick = pick(full, 2);
+    // remove deck[9] (BASH): the remaining 9 are all upgradable, shuffled after the removal
+    const probe = structuredClone(afterPick);
+    probe.run.deck.splice(9, 1);
+    const fullOrder = shuffleOrder(probe);
+    const served = choose(afterPick, [9]);
+    expect(served.run.deck.findIndex((c) => c.upgrades > 0)).toBe(fullOrder[0]!);
   });
 
   test("Duplicator: exact copy of the chosen card", () => {
@@ -1002,33 +1127,77 @@ describe("one-time events", () => {
     expect(deckIds(s)).toContain("ASCENDERS_BANE");
   });
 
-  test("Knowing Skull: max(6, 10% maxHp) base cost, +1 per repeat of the same ware", () => {
-    let s = forceEvent("KS1", "KNOWING_SKULL"); // base = max(6, floor(8)) = 8
-    s = pick(s, 0);
-    expect(s.run.hp).toBe(72);
+  test("Knowing Skull: flat 6 HP base cost, +1 per repeat of the same ware; exit stays 6", () => {
+    // KnowingSkull.java: leaveCost = 6 and every ware starts at leaveCost;
+    // options in the game's order: potion (0), gold (1), card (2), leave (3)
+    let s = forceEvent("KS1", "KNOWING_SKULL", { mutate: (g) => (g.run.maxHp = g.run.hp = 150) });
+    s = pick(s, 1); // riches: 6
+    expect(s.run.hp).toBe(144);
     expect(s.run.gold).toBe(189);
-    s = pick(s, 0); // second riches costs 9
-    expect(s.run.hp).toBe(63);
+    s = pick(s, 1); // second riches costs 7
+    expect(s.run.hp).toBe(137);
     expect(s.run.gold).toBe(279);
-    s = pick(s, 1); // success still base 8
-    expect(s.run.hp).toBe(55);
+    s = pick(s, 2); // success still base 6
+    expect(s.run.hp).toBe(131);
     const gained = s.run.deck[10]!;
     expect(bundle.cards.get(gained.defId)!.color).toBe("colorless");
     expect(bundle.cards.get(gained.defId)!.rarity).toBe("uncommon");
-    s = pick(s, 2); // potion, base 8
-    expect(s.run.hp).toBe(47);
+    s = pick(s, 0); // potion, base 6
+    expect(s.run.hp).toBe(125);
     expect(s.run.potions.some((p) => p !== null)).toBe(true);
-    s = pick(s, 3); // leave: base cost, no increment
-    expect(s.run.hp).toBe(39);
+    s = pick(s, 3); // leave: 6, no increment, no max HP scaling
+    expect(s.run.hp).toBe(119);
     expect(roomOf(s).kind).toBe("map");
   });
 
+  test("Knowing Skull: the potion is a uniform potionRng pick (no rarity roll); Sozu skips it", () => {
+    const s = forceEvent("KS3", "KNOWING_SKULL");
+    const reg = RngRegistry.fromState(s.rng);
+    const pool = [...bundle.potions.values()].filter((p) => p.class === "shared" || p.class === "red").map((p) => p.id);
+    const expected = pool[reg.get("potionRng").random(pool.length - 1)];
+    const after = pick(s, 0);
+    expect(after.run.potions.filter((p) => p !== null)).toEqual([expected!]);
+    expect(RngRegistry.fromState(after.rng).get("potionRng").counter).toBe(RngRegistry.fromState(s.rng).get("potionRng").counter + 1);
+
+    const sozu = forceEvent("KS4", "KNOWING_SKULL", { mutate: (g) => g.run.relics.push({ defId: "SOZU", counter: 0 }) });
+    const sozuAfter = pick(sozu, 0);
+    expect(sozuAfter.run.hp).toBe(80 - 6);
+    expect(sozuAfter.run.potions.every((p) => p === null)).toBe(true);
+    expect(RngRegistry.fromState(sozuAfter.rng).get("potionRng").counter).toBe(RngRegistry.fromState(sozu.rng).get("potionRng").counter);
+  });
+
   test("Knowing Skull can kill: event HP loss ends the run", () => {
-    let s = forceEvent("KS2", "KNOWING_SKULL", { mutate: (g) => (g.run.hp = 7) });
-    s = pick(s, 0); // costs 8
+    let s = forceEvent("KS2", "KNOWING_SKULL", { mutate: (g) => (g.run.hp = 5) });
+    s = pick(s, 1); // costs 6
     expect(s.run.hp).toBe(0);
     expect(s.outcome?.kind).toBe("death");
     expect(roomOf(s).kind).toBe("gameOver");
+  });
+
+  test("event HP loss triggers the death saves (AbstractPlayer.damage): Fairy in a Bottle, then Lizard Tail", () => {
+    let fairy = forceEvent("KS5", "KNOWING_SKULL", {
+      mutate: (g) => ((g.run.hp = 5), (g.run.potions[0] = "FAIRY_POTION"), g.run.relics.push({ defId: "LIZARD_TAIL", counter: 0 })),
+    });
+    fairy = pick(fairy, 1); // riches: 6 HP kills, the fairy heals (int)(80 * 0.3) = 24
+    expect(fairy.outcome).toBeNull();
+    expect(fairy.run.hp).toBe(24);
+    expect(fairy.run.gold).toBe(99 + 90); // the event goes on
+    expect(fairy.run.potions[0]).toBeNull();
+    expect(fairy.run.relics.find((r) => r.defId === "LIZARD_TAIL")!.counter).toBe(0);
+
+    let tail = forceEvent("KS6", "KNOWING_SKULL", {
+      mutate: (g) => ((g.run.hp = 5), g.run.relics.push({ defId: "LIZARD_TAIL", counter: 0 })),
+    });
+    tail = pick(tail, 1);
+    expect(tail.run.hp).toBe(40); // maxHealth / 2
+    expect(tail.run.relics.find((r) => r.defId === "LIZARD_TAIL")!.counter).toBe(1);
+
+    const bloom = forceEvent("KS7", "KNOWING_SKULL", {
+      mutate: (g) => ((g.run.hp = 5), (g.run.potions[0] = "FAIRY_POTION"), g.run.relics.push({ defId: "MARK_OF_THE_BLOOM", counter: 0 })),
+    });
+    const dead = pick(bloom, 1);
+    expect(dead.outcome?.kind).toBe("death"); // Mark of the Bloom blocks the saves
+    expect(dead.run.potions[0]).toBe("FAIRY_POTION");
   });
 
   test("Lab: 3 potions via the reward screen (2 at A15)", () => {
@@ -1190,5 +1359,382 @@ describe("event relic hooks apply uniformly", () => {
     expect(ev("NOTE_FOR_YOURSELF").canSpawn!(s.run)).toBe(true);
     s.run.ascension = 15;
     expect(ev("NOTE_FOR_YOURSELF").canSpawn!(s.run)).toBe(false);
+  });
+});
+
+// Behaviors pinned to the decompiled game source (events/*, AbstractDungeon,
+// AbstractRoom, EventHelper, AbstractPlayer). Each test names the Java site.
+describe("java fidelity (decompiled source)", () => {
+  const ironcladPotions = (): string[] =>
+    [...bundle.potions.values()].filter((p) => p.class === "shared" || p.class === "red").map((p) => p.id);
+  const colorless = (rarity: string): string[] =>
+    [...bundle.cards.values()].filter((c) => c.color === "colorless" && c.rarity === rarity).map((c) => c.id);
+
+  test("Big Fish: the banana heals maxHealth / 3 with integer division", () => {
+    let s = forceEvent("BF4", "BIG_FISH", { mutate: (g) => ((g.run.maxHp = 75), (g.run.hp = 10)) });
+    s = pick(s, 0);
+    expect(s.run.hp).toBe(10 + 25); // 75 * 0.3333 would floor to 24
+  });
+
+  test("Golden Idol: the hide trap costs at least 1 max HP", () => {
+    let s = forceEvent("GI3", "GOLDEN_IDOL", { mutate: (g) => ((g.run.maxHp = 12), (g.run.hp = 12)) });
+    s = pick(pick(s, 0), 4); // take, then hide: (int)(12 * 0.08) = 0 -> 1
+    expect(s.run.maxHp).toBe(11);
+  });
+
+  test("Dead Adventurer ambush: loot is rolled before the fight; an unclaimed RELIC is a plain pop (bottles kept)", () => {
+    for (let i = 0; i < 60; i++) {
+      let s = forceEvent(`DAR${i}`, "DEAD_ADVENTURER", {
+        mutate: (g) => {
+          boost(g);
+          g.run.pools.commonRelics.unshift("WHETSTONE");
+          g.run.pools.uncommonRelics.unshift("BOTTLED_TORNADO");
+          g.run.pools.rareRelics.unshift("BOTTLED_FLAME");
+        },
+      });
+      const room = roomOf(s) as Extract<RoomState, { kind: "event" }>;
+      Object.assign(room.data!, { encounter: "LAGAVULIN_EVENT", phase: 2, rewards: ["GOLD", "NOTHING", "RELIC"] });
+      s = pick(s, 0);
+      const fight = roomOf(s);
+      if (fight.kind !== "combat") continue;
+      const data = fight.eventCombat!.data as EventRoomData;
+      expect(data.ambushGold as number).toBeGreaterThanOrEqual(25);
+      expect(data.ambushGold as number).toBeLessThanOrEqual(35);
+      // returnRandomRelic (not screenless) keeps whatever the pool pops
+      expect(["WHETSTONE", "BOTTLED_TORNADO", "BOTTLED_FLAME"]).toContain(data.ambushRelic as string);
+      s = winCombat(s);
+      const rw = roomOf(s);
+      if (rw.kind !== "rewards") throw new Error("expected rewards");
+      const gold = rw.entries.find((e) => e.kind === "gold");
+      expect(gold && gold.kind === "gold" ? gold.amount : -1).toBe(data.ambushGold as number);
+      expect(rw.entries.filter((e) => e.kind === "relic").map((e) => (e.kind === "relic" ? e.id : ""))).toEqual([
+        data.ambushRelic as string,
+      ]);
+      return;
+    }
+    throw new Error("no ambush in 60 seeds at 75% chance");
+  });
+
+  describe("saves from before event-fight loot was pre-rolled roll it at victory", () => {
+    const stripPreRolled = (s: GameState, keys: string[]): void => {
+      const fight = roomOf(s);
+      if (fight.kind !== "combat") throw new Error("expected combat");
+      const data = fight.eventCombat!.data as Record<string, unknown>;
+      for (const k of keys) delete data[k];
+    };
+    const goldOf = (s: GameState): number => {
+      const rw = roomOf(s);
+      if (rw.kind !== "rewards") throw new Error("expected rewards");
+      const gold = rw.entries.find((e) => e.kind === "gold");
+      return gold && gold.kind === "gold" ? gold.amount : -1;
+    };
+    const relicsOf = (s: GameState): string[] => {
+      const rw = roomOf(s);
+      if (rw.kind !== "rewards") throw new Error("expected rewards");
+      return rw.entries.flatMap((e) => (e.kind === "relic" ? [e.id] : []));
+    };
+
+    test("Dead Adventurer", () => {
+      for (let i = 0; i < 60; i++) {
+        let s = forceEvent(`DAOLD${i}`, "DEAD_ADVENTURER", { mutate: boost });
+        const room = roomOf(s) as Extract<RoomState, { kind: "event" }>;
+        Object.assign(room.data!, { encounter: "LAGAVULIN_EVENT", phase: 2, rewards: ["GOLD", "NOTHING", "RELIC"] });
+        s = pick(s, 0);
+        if (roomOf(s).kind !== "combat") continue;
+        stripPreRolled(s, ["ambushGold", "ambushRelic"]);
+        s = winCombat(s);
+        expect(goldOf(s)).toBeGreaterThanOrEqual(25);
+        expect(goldOf(s)).toBeLessThanOrEqual(35);
+        expect(relicsOf(s)).toHaveLength(1); // the unclaimed RELIC
+        return;
+      }
+      throw new Error("no ambush in 60 seeds at 75% chance");
+    });
+
+    test("Mushrooms", () => {
+      let s = forceEvent("MUOLD", "HYPNOTIZING_COLORED_MUSHROOMS", { mutate: boost });
+      s = pick(s, 0);
+      stripPreRolled(s, ["gold"]);
+      s = winCombat(s);
+      expect(goldOf(s)).toBeGreaterThanOrEqual(20);
+      expect(goldOf(s)).toBeLessThanOrEqual(30);
+      expect(relicsOf(s)).toEqual(["ODD_MUSHROOM"]);
+    });
+
+    test("Masked Bandits", () => {
+      if (!["POINTY", "ROMEO", "BEAR"].every((m) => bundle.monsters.has(m))) return;
+      let s = forceEvent("MBOLD", "MASKED_BANDITS", { mutate: boost });
+      s = pick(s, 1);
+      stripPreRolled(s, ["gold"]);
+      s = winCombat(s);
+      expect(goldOf(s)).toBeGreaterThanOrEqual(25);
+      expect(goldOf(s)).toBeLessThanOrEqual(35);
+      expect(relicsOf(s)).toEqual(["RED_MASK"]);
+    });
+
+    test("Mysterious Sphere", () => {
+      if (!bundle.monsters.has("ORB_WALKER")) return;
+      let s = forceEvent("MSOLD", "MYSTERIOUS_SPHERE", { mutate: boost });
+      s = pick(s, 0);
+      stripPreRolled(s, ["gold"]);
+      s = winCombat(s);
+      expect(goldOf(s)).toBeGreaterThanOrEqual(45);
+      expect(goldOf(s)).toBeLessThanOrEqual(55);
+      expect(relicsOf(s)).toHaveLength(1);
+    });
+  });
+
+  test("event-combat card rewards keep the EventRoom's base 3/37 odds, not MonsterRoomElite's 10/40", () => {
+    for (let i = 0; i < 200; i++) {
+      const s = createRun({ seed: `ODDS${i}`, bundle, character: "IRONCLAD" });
+      const rarities = (room: "monster" | "elite") =>
+        createCardReward(makeTestCtx(structuredClone(s), bundle).ctx, room).map((c) => `${c.id}:${c.rarity}`);
+      const monster = rarities("monster");
+      if (JSON.stringify(monster) === JSON.stringify(rarities("elite"))) continue;
+      const { ctx } = makeTestCtx(s, bundle);
+      const got = eventCombatRewards(ctx, { cardReward: true }).map((e) => (e.kind === "card" ? `${e.id}:${e.rarity}` : ""));
+      expect(got).toEqual(monster);
+      return;
+    }
+    throw new Error("no seed where elite and monster odds differ");
+  });
+
+  test("event-combat gold is a RewardItem: Golden Idol adds round(25%)", () => {
+    const s = createRun({ seed: "IDOLGOLD", bundle, character: "IRONCLAD" });
+    s.run.relics.push({ defId: "GOLDEN_IDOL", counter: 0 });
+    const { ctx } = makeTestCtx(s, bundle);
+    expect(eventCombatRewards(ctx, { gold: 30 })).toEqual([{ kind: "gold", amount: 38, taken: false }]);
+  });
+
+  test("Falling: picks roll attack -> skill -> power on miscRng and never take a bottled card", () => {
+    const s = forceEvent("FL2", "FALLING", {
+      skipOnEnter: true,
+      mutate: (g) => {
+        g.run.deck.push({ defId: "INFLAME", upgrades: 0, misc: 0, bottled: false });
+        g.run.deck[0]!.bottled = true; // a bottled Strike is never offered
+      },
+    });
+    const misc = RngRegistry.fromState(s.rng).get("miscRng");
+    const of = (type: string): number[] =>
+      s.run.deck.map((_, i) => i).filter((i) => bundle.cards.get(s.run.deck[i]!.defId)!.type === type && !s.run.deck[i]!.bottled);
+    const expected: Record<string, number> = {};
+    for (const [key, type] of [["attackIdx", "attack"], ["skillIdx", "skill"], ["powerIdx", "power"]] as const) {
+      const idxs = of(type);
+      expected[key] = idxs[misc.random(idxs.length - 1)]!;
+    }
+    const { ctx, saveRng } = makeTestCtx(s, bundle);
+    bundle.events.get("FALLING")!.onEnter!(ctx);
+    saveRng();
+    const d = dataOf(s);
+    const got: Record<string, unknown> = { attackIdx: d.attackIdx, skillIdx: d.skillIdx, powerIdx: d.powerIdx };
+    expect(got).toEqual(expected);
+    expect(d.attackIdx).not.toBe(0);
+  });
+
+  test("Mindbloom war: 25 gold from A13 (ascensionLevel >= 13), 50 below", () => {
+    const warGold = (ascension: number): number => {
+      const s = forceEvent(`MIG${ascension}`, "MINDBLOOM", { ascension });
+      const { ctx } = makeTestCtx(s, bundle);
+      bundle.events.get("MINDBLOOM")!.onCombatVictory!(ctx, "HEXAGHOST", {});
+      const rw = s.run.room!;
+      if (rw.kind !== "rewards") throw new Error("expected rewards");
+      const gold = rw.entries.find((e) => e.kind === "gold");
+      return gold && gold.kind === "gold" ? gold.amount : -1;
+    };
+    expect(warGold(12)).toBe(50);
+    expect(warGold(13)).toBe(25);
+  });
+
+  test("Mysterious Sphere: the 45-55 gold is rolled before the fight", () => {
+    let s = forceEvent("MS2", "MYSTERIOUS_SPHERE", { mutate: boost });
+    const expectedGold = RngRegistry.fromState(s.rng).get("miscRng").randomRange(45, 55);
+    s = pick(s, 0);
+    const fight = roomOf(s);
+    if (fight.kind !== "combat") throw new Error("expected combat");
+    expect((fight.eventCombat!.data as EventRoomData).gold).toBe(expectedGold);
+  });
+
+  test("Sensory Stone: memory shuffle, then N RewardItem(COLORLESS) (30% rare, no upgrades), then the HP cost", () => {
+    expect(COLORLESS_RARE_CHANCE).toBe((metaCorpus as { colorlessRewards: { rareChance: number } }).colorlessRewards.rareChance);
+    const s = forceEvent("ST2", "SENSORY_STONE", {
+      mutate: (g) => {
+        g.run.relics.push({ defId: "QUESTION_CARD", counter: 0 }); // 4 cards per reward
+        g.run.blizzard.cardRarityFactor = -10;
+      },
+    });
+    const reg = RngRegistry.fromState(s.rng);
+    const cardRng = reg.get("cardRng");
+    const expected: string[][] = [];
+    let sawRare = false;
+    for (let g = 0; g < 2; g++) {
+      const group: string[] = [];
+      for (let k = 0; k < 4; k++) {
+        const rare = cardRng.randomBoolean(COLORLESS_RARE_CHANCE);
+        sawRare ||= rare;
+        const pool = colorless(rare ? "rare" : "uncommon");
+        let id: string;
+        do id = pool[cardRng.random(pool.length - 1)]!;
+        while (group.includes(id));
+        group.push(id);
+      }
+      expected.push(group);
+    }
+    const after = pick(s, 1);
+    expect(after.run.hp).toBe(75);
+    const rw = roomOf(after);
+    if (rw.kind !== "rewards") throw new Error("expected rewards");
+    const groups: string[][] = [];
+    for (const e of rw.entries) {
+      if (e.kind !== "card") continue;
+      (groups[e.group] ??= []).push(e.id);
+      expect(e.upgraded).toBe(false);
+    }
+    expect(groups.filter((g) => g !== undefined)).toEqual(expected);
+    expect(RngRegistry.fromState(after.rng).get("miscRng").counter).toBe(reg.get("miscRng").counter + 1);
+    expect(after.run.blizzard.cardRarityFactor).toBe(sawRare ? CARD_REWARD.pityInitial : -10);
+  });
+
+  test("The Library: a duplicate re-rolls the rarity AND the card", () => {
+    for (let i = 0; i < 40; i++) {
+      const s = forceEvent(`LI${i}`, "THE_LIBRARY");
+      const cardRng = RngRegistry.fromState(s.rng).get("cardRng");
+      const factor = s.run.blizzard.cardRarityFactor;
+      const rarity = (): string => {
+        const roll = cardRng.random(99) + factor;
+        const rare = CARD_REWARD.rareChance.nonElite;
+        return roll < rare ? "rare" : roll < rare + CARD_REWARD.uncommonChance.nonElite ? "uncommon" : "common";
+      };
+      const draw = (): string => {
+        const r = rarity();
+        const pool = [...bundle.cards.values()].filter((c) => c.color === "red" && c.rarity === r).map((c) => c.id);
+        return pool[cardRng.random(pool.length - 1)]!;
+      };
+      const rolled: string[] = [];
+      let dupes = 0;
+      for (let k = 0; k < 20; k++) {
+        let id = draw();
+        while (rolled.includes(id)) {
+          dupes++;
+          id = draw();
+        }
+        rolled.push(id);
+      }
+      if (dupes === 0) continue;
+      const after = pick(s, 0);
+      const args = after.pending!.resumeArgs as { extra: { cards: string[] } };
+      expect(args.extra.cards).toEqual([...rolled].reverse());
+      return;
+    }
+    throw new Error("no library roll with a duplicate in 40 seeds");
+  });
+
+  test("Match and Keep: pairs match on card id, so two A15 curse slots with the same curse match", () => {
+    const s = forceEvent("MK2", "MATCH_AND_KEEP", { ascension: 15 });
+    const d = dataOf(s);
+    (d.cards as string[])[3] = "REGRET";
+    (d.cards as string[])[4] = "REGRET";
+    const board = d.board as number[];
+    let t = pick(s, board.indexOf(3));
+    t = pick(t, board.indexOf(4));
+    expect(deckIds(t).filter((id) => id === "REGRET").length).toBe(1);
+    const matched = dataOf(t).matched as boolean[];
+    expect(matched[board.indexOf(3)] && matched[board.indexOf(4)]).toBe(true);
+  });
+
+  test("Lab and The Woman in Blue: PotionHelper.getRandomPotion is a uniform potionRng pick", () => {
+    const pool = ironcladPotions();
+    const lab = forceEvent("LA3", "LAB");
+    const potionRng = RngRegistry.fromState(lab.rng).get("potionRng");
+    const expected = [0, 1, 2].map(() => pool[potionRng.random(pool.length - 1)]!);
+    const labRw = roomOf(pick(lab, 0));
+    if (labRw.kind !== "rewards") throw new Error("expected rewards");
+    expect(labRw.entries.map((e) => (e.kind === "potion" ? e.id : ""))).toEqual(expected);
+
+    const blue = forceEvent("WB4", "THE_WOMAN_IN_BLUE");
+    const blueRng = RngRegistry.fromState(blue.rng).get("potionRng");
+    const blueExpected = [0, 1].map(() => pool[blueRng.random(pool.length - 1)]!);
+    const blueRw = roomOf(pick(blue, 1));
+    if (blueRw.kind !== "rewards") throw new Error("expected rewards");
+    expect(blueRw.entries.map((e) => (e.kind === "potion" ? e.id : ""))).toEqual(blueExpected);
+
+    // Sozu: the rolls still happen (rewards vanish on claim in the game)
+    const sozu = forceEvent("LA4", "LAB", { mutate: (g) => g.run.relics.push({ defId: "SOZU", counter: 0 }) });
+    const sozuAfter = pick(sozu, 0);
+    const sozuRw = roomOf(sozuAfter);
+    if (sozuRw.kind !== "rewards") throw new Error("expected rewards");
+    expect(sozuRw.entries).toEqual([]);
+    expect(RngRegistry.fromState(sozuAfter.rng).get("potionRng").counter).toBe(RngRegistry.fromState(sozu.rng).get("potionRng").counter + 3);
+  });
+
+  test("Cursed Tome: the book is drawn from the ones not owned", () => {
+    const s = forceEvent("CT2", "CURSED_TOME", {
+      mutate: (g) => g.run.relics.push({ defId: "NECRONOMICON", counter: 0 }, { defId: "ENCHIRIDION", counter: 0 }),
+    });
+    const room = roomOf(s) as Extract<RoomState, { kind: "event" }>;
+    room.screen = "take";
+    const rw = roomOf(pick(s, 2));
+    if (rw.kind !== "rewards") throw new Error("expected rewards");
+    expect(rw.entries).toEqual([{ kind: "relic", id: "NILRYS_CODEX", taken: false }]);
+  });
+
+  test("The Divine Fountain spawns only for a curse other than Necronomicurse / Bell / Ascender's Bane", () => {
+    const s = createRun({ seed: "FOUNT", bundle, character: "IRONCLAD", ascension: 10 });
+    const fountain = bundle.events.get("THE_DIVINE_FOUNTAIN")!;
+    expect(deckIds(s)).toContain("ASCENDERS_BANE");
+    expect(fountain.canSpawn!(s.run)).toBe(false); // AbstractPlayer.isCursed skips it
+    s.run.deck.push({ defId: "CURSE_OF_THE_BELL", upgrades: 0, misc: 0, bottled: false });
+    s.run.deck.push({ defId: "NECRONOMICURSE", upgrades: 0, misc: 0, bottled: false });
+    expect(fountain.canSpawn!(s.run)).toBe(false);
+    s.run.deck.push({ defId: "PRIDE", upgrades: 0, misc: 0, bottled: false });
+    expect(fountain.canSpawn!(s.run)).toBe(true);
+  });
+
+  test("Secret Portal: the jump fires relic onEnterRoom like any room transition (Maw Bank)", () => {
+    let s = forceEvent("SP2", "SECRET_PORTAL", { mutate: (g) => (boost(g), g.run.relics.push({ defId: "MAW_BANK", counter: 0 })) });
+    const gold = s.run.gold;
+    s = pick(s, 0);
+    expect(roomOf(s).kind).toBe("combat");
+    expect(s.run.gold).toBe(gold + 12);
+  });
+
+  test("Ssserpent Head pays on every ? node, even one that rolls into a fight", () => {
+    // AbstractDungeon.nextRoomTransition fires onEnterRoom(nextRoom.room) with
+    // the ?'s EventRoom BEFORE EventHelper.roll decides what it becomes
+    const walkIn = (kind: "unknown" | "monster"): GameState => {
+      const s = createRun({ seed: "SSSERPENT", bundle, character: "IRONCLAD" });
+      s.run.relics.push({ defId: "SSSERPENT_HEAD", counter: 0 });
+      s.run.room = { kind: "map" };
+      const x = s.run.map!.rows[0]!.findIndex((n) => n !== null);
+      s.run.map!.rows[0]![x]!.kind = kind;
+      s.run.blizzard.monsterChance = 1.0; // the ? becomes a fight
+      return advance(s, { cmd: "mapPick", x, y: 0 }, bundle);
+    };
+    const unknown = walkIn("unknown");
+    expect(unknown.run.room!.kind).toBe("combat");
+    expect(unknown.run.gold).toBe(99 + 50);
+    expect(walkIn("monster").run.gold).toBe(99);
+  });
+
+  test("transform follows the removed card's color and never returns the card itself", () => {
+    for (let i = 0; i < 150; i++) {
+      const s = createRun({ seed: `TF${i}`, bundle, character: "IRONCLAD" });
+      s.run.deck = [
+        { defId: "POMMEL_STRIKE", upgrades: 0, misc: 0, bottled: false },
+        { defId: "JAX", upgrades: 0, misc: 0, bottled: false },
+        { defId: "REGRET", upgrades: 0, misc: 0, bottled: false },
+      ];
+      const { ctx } = makeTestCtx(s, bundle);
+      transformDeckCard(ctx, 2); // Regret -> another obtainable curse
+      transformDeckCard(ctx, 1); // J.A.X. -> an uncommon/rare colorless card
+      transformDeckCard(ctx, 0); // class card -> the class pool minus itself
+      const [curse, colorlessCard, classCard] = s.run.deck.map((c) => bundle.cards.get(c.defId)!);
+      expect(curse!.type).toBe("curse");
+      expect(curse!.rarity).toBe("curse");
+      expect(curse!.id).not.toBe("REGRET");
+      expect(colorlessCard!.color).toBe("colorless");
+      expect(["uncommon", "rare"]).toContain(colorlessCard!.rarity);
+      expect(classCard!.color).toBe("red");
+      expect(classCard!.id).not.toBe("POMMEL_STRIKE");
+    }
   });
 });

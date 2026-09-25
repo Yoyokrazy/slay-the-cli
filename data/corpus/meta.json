@@ -379,8 +379,8 @@
 
   "unknownRoom": {
     "baseChances": { "monster": 0.1, "shop": 0.03, "treasure": 0.02 },
-    "roll": "eventRng.random() float; idx = int(roll * 100)",
-    "thresholds": "monsterSize = int(monsterChance*100); shopSize = monsterSize + (lastRoomWasShop ? 0 : int(shopChance*100)); treasureSize = shopSize + int(treasureChance*100); idx < monsterSize -> MONSTER, < shopSize -> SHOP, < treasureSize -> TREASURE, else EVENT",
+    "roll": "eventRng.random() float, drawn on EVERY ? room (also when Tiny Chest forces the chest); idx = int(roll * 100)",
+    "thresholds": "possibleResults[100] filled EVENT, then MONSTER (int(monsterChance*100)), SHOP (lastRoomWasShop ? 0 : int(shopChance*100)), TREASURE (int(treasureChance*100)) with Arrays.fill(min(99, i), min(100, i + size)); once the running index reaches 100 every later fill rewrites slot 99, so slot 99 is TREASURE whenever monster + shop cover the table; result = possibleResults[idx]",
     "lastRoomWasShopRule": "shop share is 0 if the previous room was a shop (but shopChance still escalates/resets normally)",
     "escalation": {
       "monster": "+0.10 when not chosen, reset to 0.10 when chosen",
@@ -389,11 +389,12 @@
     },
     "resetOnActTransition": { "monster": 0.1, "shop": 0.03, "treasure": 0.02 },
     "persistedInSave": ["monsterChance", "shopChance", "treasureChance"],
-    "tinyChest": "counter per relic: on the 4th ? room (value == 3) force TREASURE and reset counter to 0, else increment; forced treasure bypasses the roll but escalation/reset still applies afterwards based on choice",
+    "tinyChest": "counter per relic: on the 4th ? room (value == 3) force TREASURE and reset counter to 0, else increment; the eventRng roll is still consumed first (EventHelper.roll), and escalation/reset applies afterwards based on the forced choice",
     "juzuBracelet": "a MONSTER result is converted to EVENT (monsterChance still resets to 0.10)",
-    "ssserpentHead": "entering an EVENT room grants 50 gold (relicsOnEnterRoom)",
+    "ssserpentHead": "onEnterRoom fires with the ? node's EventRoom before the ? is rolled, so every ? node grants 50 gold, whatever it becomes (SsserpentHead.java: room instanceof EventRoom)",
     "sources": [
       "src/game/GameContext.cpp:2049-2103 (getEventRoomOutcomeHelper: thresholds, escalation, Tiny Chest every-4th, Juzu, lastRoomWasShop)",
+      "decompiled:helpers/EventHelper.java roll (roll drawn before Tiny Chest; Arrays.fill slot table) and dungeons/AbstractDungeon.java nextRoomTransition (onEnterRoom before the ? roll)",
       "include/game/GameContext.h:205-207 (monsterChance 0.1, shopChance 0.03, treasureChance 0.02 defaults)",
       "src/game/GameContext.cpp:734-737 (reset on transitionToAct)",
       "src/game/GameContext.cpp:1596-1599 (SSSERPENT_HEAD +50 gold on EVENT room)",

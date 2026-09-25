@@ -77,10 +77,12 @@ function makeEventServices(state: GameState, ctx: EffectCtx, registry: RngRegist
     goToBoss(): void {
       const run = state.run;
       const bossId = run.map!.bossId;
-      // mirror the boss-door transition: ++floor, reseed floor streams, the
-      // room-entry relic hooks (Maw Bank), boss combat
+      // mirror the boss-door transition (SecretPortal -> nextRoomTransition):
+      // ++floor, reseed floor streams, the room-entry relic hooks (Maw Bank),
+      // boss combat
       run.floor++;
       registry.reseedFloorStreams(run.floor);
+      run.history.lastRoomWasShop = false;
       fireHook(ctx, PLAYER, "onEnterRoom", "boss");
       fireHook(ctx, PLAYER, "justEnteredRoom", "boss");
       const character = ctx.bundle.characters.get(run.character)!;

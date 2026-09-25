@@ -24,6 +24,7 @@ import {
   obtainRelic,
   openRewards,
   option,
+  purgeableIndices,
   removableIndices,
   removeDeckCards,
   removeRelic,
@@ -34,7 +35,7 @@ import {
   screenlessRandomRelic,
   setScreen,
   simpleEvent,
-  transformDeckCard,
+  transformDeckCardsInOrder,
   upgradeableIndices,
   upgradeDeckCard,
 } from "./lib";
@@ -57,6 +58,8 @@ const pleadingVagrant: EventDef = simpleEvent({
       (ctx) => ctx.run.gold >= 85,
     ),
     option("Rob: obtain a random relic and the Shame curse", (ctx) => {
+      // ENGINE-GAP: as Big Fish's box - the game's Omamori veto sees the relics
+      // held before this relic is obtained
       obtainRelic(ctx, screenlessRandomRelic(ctx));
       obtainCard(ctx, "SHAME");
       endEvent(ctx);
@@ -173,14 +176,15 @@ const colosseum: EventDef = {
       };
       return;
     }
-    // COLOSSEUM_EVENT_NOBS: elite combat for most triggers; Black Star adds no extra relic
+    // COLOSSEUM_EVENT_NOBS: elite for relic triggers (eliteTrigger), but the
+    // EventRoom keeps its base card odds and has no Black Star drop
     openRewards(
       ctx,
       eventCombatRewards(ctx, {
         gold: 100,
         relics: [obtainRelicFromPool(ctx, "rare"), obtainRelicFromPool(ctx, "uncommon")],
         potionRoll: true,
-        cardRoom: "event",
+        cardReward: true,
       }),
     );
   },
@@ -225,7 +229,11 @@ const cursedTome: EventDef = {
           (c) => {
             loseHp(c, a15(c) ? 15 : 10);
             if (c.run.hp <= 0) return;
-            const id = CURSED_TOME_BOOKS[c.rng("miscRng").random(2)]!;
+            // CursedTome.randomBook: only books not already owned (Circlet
+            // when all three are), one miscRng pick
+            const books: string[] = CURSED_TOME_BOOKS.filter((b) => !hasRelic(c.run, b));
+            if (books.length === 0) books.push("CIRCLET");
+            const id = books[c.rng("miscRng").random(books.length - 1)]!;
             openRewards(c, [{ kind: "relic", id, taken: false }]);
           },
           () => screen === "take",
@@ -260,10 +268,11 @@ const augmenter: EventDef = simpleEvent({
     option(
       "Become test subject: transform 2 cards",
       (ctx) => {
-        const indices = removableIndices(ctx);
-        requestDeckChoice(ctx, { tag: "transform2", indices, min: Math.min(2, indices.length), max: Math.min(2, indices.length), reason: "event:augmenter" });
+        requestDeckChoice(ctx, { tag: "transform2", indices: purgeableIndices(ctx), min: 2, max: 2, reason: "event:augmenter" });
       },
-      (ctx) => removableIndices(ctx).length > 0,
+      // DrugDealer.java: needs 2+ cards from masterDeck.getPurgeableCards()
+      // (bottled cards count and can be picked)
+      (ctx) => purgeableIndices(ctx).length >= 2,
     ),
     option("Ingest mutagens: obtain Mutagenic Strength relic", (ctx) => {
       obtainRelic(ctx, "MUTAGENIC_STRENGTH");
@@ -271,8 +280,8 @@ const augmenter: EventDef = simpleEvent({
     }),
   ],
   onResume: (ctx, _tag, chosen) => {
-    // descending order keeps remaining indices valid (replacements append)
-    for (const i of [...new Set(chosen)].sort((x, y) => y - x)) transformDeckCard(ctx, i);
+    // transformed one by one in selection order, each draw on miscRng
+    transformDeckCardsInOrder(ctx, chosen);
     endEvent(ctx);
   },
 });
@@ -349,15 +358,22 @@ const maskedBandits: EventDef = {
       combatOption(
         combatPendingLabel(ctx, "Fight: battle the bandits; victory yields Red Mask, 25-35 gold, and a card reward", BANDIT_MONSTERS),
         BANDIT_MONSTERS,
-        (c, svc) => svc.startCombat({ encounterId: "MASKED_BANDITS_EVENT", monsters: BANDIT_MONSTERS, roomKind: "monster" }),
+        (c, svc) => {
+          // MaskedBandits.java: the 25-35 gold is added to the room's
+          // rewards (miscRng) before enterCombat
+          dataOf(c).gold = c.rng("miscRng").randomRange(25, 35);
+          svc.startCombat({ encounterId: "MASKED_BANDITS_EVENT", monsters: BANDIT_MONSTERS, roomKind: "monster" });
+        },
       ),
     ],
   }),
-  onCombatVictory: (ctx) => {
-    const gold = ctx.rng("miscRng").randomRange(25, 35);
+  onCombatVictory: (ctx, _encounterId, data) => {
+    // a save from before the gold was pre-rolled rolls it now, the same way
+    const pre = (data as Record<string, unknown> | undefined)?.gold;
+    const gold = typeof pre === "number" ? pre : ctx.rng("miscRng").randomRange(25, 35);
     // the EventRoom still runs addPotionToRewards at the end of the fight
     // (AbstractRoom.java:470-471, EventRoom branch: 40 + blizzardPotionMod)
-    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: ["RED_MASK"], potionRoll: true, cardRoom: "monster" }));
+    openRewards(ctx, eventCombatRewards(ctx, { gold, relics: ["RED_MASK"], potionRoll: true, cardReward: true }));
   },
 };
 
@@ -391,20 +407,21 @@ const theLibrary: EventDef = simpleEvent({
   summary: "An abandoned library lets you study one of twenty cards or nap for a heal.",
   options: () => [
     option("Read: choose 1 of 20 distinct class cards to obtain", (ctx) => {
-      // 20 unique cards: per card an EVENT rarity roll, then a cardRng class
-      // pick with dupe reroll; the display list is generated order REVERSED.
+      // TheLibrary.java: 20 unique cards, each getCard(rollRarity()) - an
+      // EventRoom rarity roll (no pity update) then a cardRng class pick; a
+      // dupe re-rolls the rarity AND the card. The group is built with
+      // addToBottom, so the display list is the generated order REVERSED.
       const cardRng = ctx.rng("cardRng");
+      const draw = (): string | null => {
+        const pool = classCardPool(ctx, rollCardRarity(ctx, "event"));
+        return pool.length > 0 ? pool[cardRng.random(pool.length - 1)]! : null;
+      };
       const rolled: string[] = [];
       for (let i = 0; i < 20; i++) {
-        const rarity = rollCardRarity(ctx, "event");
-        const pool = classCardPool(ctx, rarity);
-        if (pool.length === 0) continue;
-        let id: string;
+        let id = draw();
         let guard = 0;
-        do {
-          id = pool[cardRng.random(pool.length - 1)]!;
-        } while (rolled.includes(id) && ++guard < 1000);
-        rolled.push(id);
+        while ((id === null || rolled.includes(id)) && ++guard < 1000) id = draw();
+        if (id !== null && !rolled.includes(id)) rolled.push(id);
       }
       const display = [...rolled].reverse();
       requestOptionChoice(ctx, {
@@ -436,8 +453,13 @@ const theMausoleum: EventDef = simpleEvent({
   summary: "A leaking sarcophagus holds a relic; opening it risks a curse.",
   options: () => [
     option("Open coffin: obtain a random relic; 50% chance of the Writhe curse (guaranteed at A15+)", (ctx) => {
+      // TheMausoleum.java: miscRng.randomBoolean() is rolled even at A15,
+      // where the result is then forced true
+      const roll = ctx.rng("miscRng").randomBoolean();
+      const cursed = a15(ctx) ? true : roll;
+      // ENGINE-GAP: as Big Fish's box - the game's Omamori veto on the Writhe
+      // sees the relics held before this relic is obtained
       obtainRelic(ctx, screenlessRandomRelic(ctx));
-      const cursed = a15(ctx) ? true : ctx.rng("miscRng").randomBoolean();
       if (cursed) obtainCard(ctx, "WRITHE");
       endEvent(ctx);
     }),
@@ -462,7 +484,14 @@ const vampires: EventDef = simpleEvent({
   name: "Vampires(?)",
   pool: "act2",
   summary: "A blood cult converts your starter Strikes into Bites for a price paid in max HP or a Blood Vial.",
+  // Vampires.java option order: accept, Blood Vial (listed only when owned), refuse
   options: () => [
+    option("Accept: lose 30% of max HP permanently; remove all starter Strikes; obtain 5 Bites", (ctx) => {
+      loseMaxHp(ctx, Math.min(ctx.run.maxHp - 1, fractionMaxHp(ctx, 0.3, "ceil")));
+      removeStarterStrikes(ctx);
+      for (let i = 0; i < 5; i++) obtainCard(ctx, "BITE");
+      endEvent(ctx);
+    }),
     option(
       "Offer Blood Vial: lose the relic; remove all starter Strikes; obtain 5 Bites",
       (ctx) => {
@@ -473,12 +502,6 @@ const vampires: EventDef = simpleEvent({
       },
       (ctx) => hasRelic(ctx.run, "BLOOD_VIAL"),
     ),
-    option("Accept: lose 30% of max HP permanently; remove all starter Strikes; obtain 5 Bites", (ctx) => {
-      loseMaxHp(ctx, Math.min(ctx.run.maxHp - 1, fractionMaxHp(ctx, 0.3, "ceil")));
-      removeStarterStrikes(ctx);
-      for (let i = 0; i < 5; i++) obtainCard(ctx, "BITE");
-      endEvent(ctx);
-    }),
     option("Refuse: no effect", (ctx) => endEvent(ctx)),
   ],
 });
