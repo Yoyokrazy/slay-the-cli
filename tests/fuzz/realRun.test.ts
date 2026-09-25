@@ -190,6 +190,9 @@ describe("all four characters: random runs + boosted full climbs", () => {
       });
     }
 
+    // deterministic work (fixed seeds, up to 8 x 12000 steps) that takes
+    // several seconds and swings with machine load, so it gets its own budget
+    // rather than the 5s default
     test(`${ch}: boosted full climb to the act-3 victory`, () => {
       const boosted = buildBaseContentBundle();
       const def = boosted.characters.get(ch)!;
@@ -213,6 +216,6 @@ describe("all four characters: random runs + boosted full climbs", () => {
         }
       }
       throw new Error(`no boosted ${ch} run reached the act-3 victory in 8 tries`);
-    });
+    }, 60_000);
   }
 });
