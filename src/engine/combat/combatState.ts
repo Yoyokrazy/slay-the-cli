@@ -20,6 +20,9 @@ export interface CardInstance {
   misc: number;
   /** set while a power grants temporary retain (Well-Laid Plans selection) */
   retainOnce: boolean;
+  /** makeSameInstanceOf identity shared with the card a replay copy (Double
+   *  Tap, Burst, Echo Form...) was made from; absent means its own iid */
+  uuid?: number;
 }
 
 export type Pile = "draw" | "hand" | "discard" | "exhaust" | "limbo";
@@ -80,6 +83,8 @@ export interface CardQueueItem {
   autoplayed: boolean; // duplicated/forced plays don't recount per-turn "cards played" triggers
   /** what forced an autoplay (card/power/relic defId), for the combat log */
   via?: string;
+  /** autoplay that failed canUse: routed to its destination with no use and no play hooks */
+  skipTriggers?: boolean;
 }
 
 export interface CombatState {

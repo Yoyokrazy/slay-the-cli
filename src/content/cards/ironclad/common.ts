@@ -123,7 +123,11 @@ export const ironcladCommons: CardDef[] = [
     upgradeValues: { cost: 0 },
     keywords: [],
     onPlay: (ctx) => {
-      ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/havoc" });
+      // Havoc.use rolls getRandomMonster(null, true, cardRandomRng) right away,
+      // before PlayTopCardAction looks at the piles: an empty deck still rolls
+      const alive = ctx.combat!.monsters.filter((m) => !m.isDead && !m.isEscaped && !m.halfDead);
+      const target = alive.length > 0 ? alive[ctx.rng("cardRandomRng").random(alive.length - 1)]!.idx : null;
+      ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/havoc", args: { target } });
     },
   },
   {
@@ -292,7 +296,7 @@ export const ironcladCommons: CardDef[] = [
       if (ctx.upgraded) {
         ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/trueGritChoose" });
       } else {
-        ctx.queue.addToBottom({ kind: "exhaust", sel: { kind: "random", pile: "hand", n: 1 } });
+        ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/exhaustRandom", args: { n: 1 } });
       }
     },
   },

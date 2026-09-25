@@ -702,6 +702,15 @@ describe("HAND_OF_GREED", () => {
     expect(monsterHp(s)).toBe(180);
     expect(s.run.gold).toBe(99);
   });
+
+  test("no gold for killing a Minion-power enemy of a normal monster def (GreedAction hasPower Minion)", () => {
+    let s = fight({ deck: ["HAND_OF_GREED", ...strikes(4)], monsters: ["T_FRAIL"] });
+    // Gremlin Leader's gremlins: category "normal", MINION power
+    s.combat!.monsters[0]!.powers.push({ id: "MINION", amount: 1, justApplied: false, data: null });
+    s = play(s, "HAND_OF_GREED", 0);
+    expect(s.combat!.monsters[0]!.isDead).toBe(true);
+    expect(s.run.gold).toBe(99);
+  });
 });
 
 describe("MAGNETISM", () => {

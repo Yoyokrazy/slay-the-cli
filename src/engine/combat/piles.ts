@@ -48,9 +48,14 @@ export function moveCard(
     to === "draw" ? pile.unshift(iid) : pile.push(iid);
   } else if (position === "bottom") {
     to === "draw" ? pile.push(iid) : pile.unshift(iid);
+  } else if (pile.length === 0) {
+    pile.push(iid); // CardGroup.addToRandomSpot: an empty pile takes the card with no roll
   } else {
-    const idx = ctx.rng("cardRandomRng").random(pile.length);
-    pile.splice(idx, 0, iid);
+    // addToRandomSpot inserts at cardRandomRng.random(size - 1), an index into
+    // the game's bottom-first list, so the card can land on the bottom but
+    // never on top: r cards stay below it, size - r above it.
+    const r = ctx.rng("cardRandomRng").random(pile.length - 1);
+    pile.splice(pile.length - r, 0, iid);
   }
 }
 

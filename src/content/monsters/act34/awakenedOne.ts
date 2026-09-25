@@ -16,7 +16,7 @@
 // the two Cultists.
 
 import type { MonsterDef } from "../../../engine/content/defs";
-import { spawnMonster } from "../../../engine/combat/interpreter";
+import { removeCardFromCombat, spawnMonster } from "../../../engine/combat/interpreter";
 import { removePower } from "../../../engine/combat/powerRuntime";
 import { monster } from "../../../engine/core/ids";
 import { firstTurn, lastMove, lastTwoMovesWere } from "../../util";
@@ -103,7 +103,19 @@ export const awakenedOne: MonsterDef = {
       self.data.rebirthPending = true;
       removeMonsterDebuffs(ctx, self);
       removePower(ctx, monster(self.idx), "CURIOSITY");
-      ctx.combat!.cardQueue.length = 0; // remaining queued player plays fizzle
+      // ClearCardQueueAction: every queued play is dropped and its card lost
+      // for the rest of the fight - a Double Tap copy, and also a real
+      // Havoc'd, Mayhem'd, Distilled Chaos or Omniscience card (the game has
+      // already pulled it from draw and unlimbo'd it; this engine stages it in
+      // limbo, or leaves an Omniscience pick in draw until it resolves). The
+      // card still resolving keeps its record for its own destination
+      // (Omniscience queues that same card a second time).
+      const resolving = ctx.rt.currentItem?.iid;
+      for (const q of ctx.combat!.cardQueue) {
+        if (q.iid === null || q.iid === resolving) continue;
+        removeCardFromCombat(ctx, q.iid);
+      }
+      ctx.combat!.cardQueue.length = 0;
       self.powers.push({
         id: "AWAKENED_REBIRTH",
         amount: 1,

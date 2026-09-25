@@ -63,8 +63,10 @@ export type GameAction =
   /** one monster acts, then the rest re-queue behind whatever its move queued */
   | { kind: "monsterStep"; remaining: number[] }
   | { kind: "endRound"; skipMonsterEndTurn?: boolean }
-  // escapes into content-registered code with plain-data args
-  | { kind: "effect"; ref: EffectRefId; args?: unknown }
+  // escapes into content-registered code with plain-data args; `preview` lists
+  // what the effect will queue when it resolves, read only by the card-preview
+  // dry run (the interpreter ignores it)
+  | { kind: "effect"; ref: EffectRefId; args?: unknown; preview?: GameAction[] }
   // pauses the interpreter for player input; resume is a registered continuation
   | { kind: "choice"; request: ChoiceRequest; resume: EffectRefId; resumeArgs?: unknown };
 

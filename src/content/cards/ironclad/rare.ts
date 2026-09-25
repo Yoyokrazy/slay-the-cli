@@ -129,8 +129,8 @@ export const ironcladRares: CardDef[] = [
     upgradeValues: { damage: 12, magic: 4 },
     keywords: ["exhaust", "tag:healing"],
     onPlay: (ctx) => {
-      // damage + fatal bonus resolve atomically (the bonus must land even when
-      // the kill ends the combat - see effects.ts)
+      // FeedAction: damage + the fatal bonus resolve inside one action (the
+      // bonus must land even when the kill ends the combat - see effects.ts)
       const target = ctx.target ?? 0;
       const dmg = calcCardDamage(ctx, ctx.card, target, ctx.upgraded ? 12 : 10);
       ctx.queue.addToBottom({
@@ -248,8 +248,8 @@ export const ironcladRares: CardDef[] = [
     upgradeValues: { damage: 5 },
     keywords: ["exhaust", "tag:healing"],
     onPlay: (ctx) => {
-      // damage + heal resolve atomically (the heal must land even when the
-      // sweep ends the combat - see effects.ts)
+      // VampireDamageAllEnemiesAction: the sweep, then a queued heal for the
+      // HP actually lost (see effects.ts)
       const base = ctx.upgraded ? 5 : 4;
       const amounts = ctx.combat!.monsters.map((_, i) => calcCardDamage(ctx, ctx.card, i, base));
       ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/reaper", args: { amounts } });

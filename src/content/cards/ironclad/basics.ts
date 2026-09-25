@@ -3,8 +3,10 @@
 // on play (Anger), and X-cost (Whirlwind). Values audited vs data/corpus/cards.json.
 
 import type { CardDef } from "../../../engine/content/defs";
+import type { GameAction } from "../../../engine/core/actions";
 import { calcCardDamage } from "../../../engine/combat/damageCalc";
 import { PLAYER, monster } from "../../../engine/core/ids";
+import { hasRelic } from "../../util";
 
 export const ironcladBasics: CardDef[] = [
   {
@@ -111,11 +113,17 @@ export const ironcladBasics: CardDef[] = [
     keywords: [],
     onPlay: (ctx) => {
       const base = ctx.upgraded ? 8 : 5;
-      const x = ctx.energyOnUse; // X-cost: captured at queue time; engine spends it
+      // multiDamage is fixed at use; WhirlwindAction queues the hits when it
+      // resolves (see effects.ts). X-cost: captured at queue time; engine spends it.
       const amounts = ctx.combat!.monsters.map((_, i) => calcCardDamage(ctx, ctx.card, i, base));
-      for (let i = 0; i < x; i++) {
-        ctx.queue.addToBottom({ kind: "damageAllMonsters", amounts, info: { type: "attack", source: PLAYER } });
-      }
+      const hits = ctx.energyOnUse + (hasRelic(ctx, "CHEMICAL_X") ? 2 : 0);
+      const hit: GameAction = { kind: "damageAllMonsters", amounts, info: { type: "attack", source: PLAYER } };
+      ctx.queue.addToBottom({
+        kind: "effect",
+        ref: "ironclad/whirlwind",
+        args: { amounts, x: ctx.energyOnUse },
+        preview: Array.from({ length: hits }, () => hit),
+      });
     },
   },
 ];

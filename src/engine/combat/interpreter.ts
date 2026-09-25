@@ -7,7 +7,7 @@ import type { EffectCtx, CardCtx, ContentBundle } from "../content/defs";
 import { needsEnemyTarget } from "../content/targeting";
 import type { GameAction, DamageInfo, CardSelector } from "../core/actions";
 import type { CardInstance, CardQueueItem, MonsterState, Pile } from "./combatState";
-import { fireHook, foldHook, foldHookScoped, anyHook } from "../core/hooks";
+import { fireHook, fireHookScoped, foldHook, foldHookScoped, anyHook, vetoHook } from "../core/hooks";
 import { PLAYER, monster, type ActorRef } from "../core/ids";
 import { applyPower, reducePower, removePower, getPowerAmount, tickTurnBasedPowers } from "./powerRuntime";
 import { calcMonsterBlock } from "./damageCalc";
@@ -447,9 +447,13 @@ export function discardCard(ctx: EffectCtx, iid: number, manual: boolean): void 
 export function exhaustCard(ctx: EffectCtx, iid: number): void {
   const c = card(ctx, iid);
   moveCard(ctx, iid, "exhaust");
+  // CardGroup.moveToExhaustPile: relics' onExhaust, then powers', then the
+  // card's own triggerOnExhaust (Dead Branch queues its card ahead of Dark
+  // Embrace's draw; Sentinel's energy lands above Charon's Ashes)
+  fireHookScoped(ctx, PLAYER, "relics", "onExhaust", c);
+  fireHookScoped(ctx, PLAYER, "powers", "onExhaust", c);
   const def = ctx.bundle.cards.get(c.defId);
   if (def?.onExhaustThis) def.onExhaustThis(cardCtx(ctx, c, null, 0));
-  fireHook(ctx, PLAYER, "onExhaust", c);
   ctx.emit("cardExhausted", { iid });
 }
 
@@ -497,6 +501,7 @@ export function makeSameInstanceTempCard(ctx: EffectCtx, source: CardInstance, d
     masterIdx: null,
     misc: source.misc,
     retainOnce: false,
+    uuid: source.uuid ?? source.iid,
   };
   if (dest === "draw") {
     moveCard(ctx, iid, "draw", "random");
@@ -549,7 +554,10 @@ function resolveCardPlay(ctx: EffectCtx, item: CardQueueItem): void {
 
   ctx.rt.currentItem = item;
 
-  // target validity: fizzle if targeted monster is gone (duplicated plays can outlive targets)
+  // target validity: AbstractCard.cardPlayable fails a dying (dead) target, so
+  // the play fizzles uncounted (duplicated plays can outlive targets). ENGINE-
+  // NOTE: an escaped target also fizzles here; the game counts that play and
+  // drops the card like the half-dead case below (unreachable mid-turn today).
   if (needsEnemyTarget(def.target) && item.target !== null) {
     const t = combat.monsters[item.target];
     if (!t || t.isDead || t.isEscaped) {
@@ -575,6 +583,18 @@ function resolveCardPlay(ctx: EffectCtx, item: CardQueueItem): void {
   }
 
   item.exhaustOnUse ||= cardHasKeyword(c, def, "exhaust");
+
+  // GameActionManager.getNextAction: an autoplayed card that fails canUse
+  // (an unplayable status/curse, Clash with a non-Attack in hand, a
+  // canPlayCard veto) is not played. It still gets a UseCardAction with
+  // dontTriggerOnUseCard: no use, no play hooks, not counted as played, then
+  // the usual destination (exhausted when Havoc'd, a power vanishes).
+  if (item.autoplayed && !autoplayUsable(ctx, c, def, item)) {
+    item.skipTriggers = true;
+    ctx.queue.addToBottom({ kind: "effect", ref: "__afterCardUsed", args: { iid: item.iid } });
+    return;
+  }
+
   combat.turnFlags.cardsPlayedThisTurn++;
   combat.combatFlags.cardsPlayedThisCombat++;
   if (def.type === "attack") {
@@ -585,6 +605,16 @@ function resolveCardPlay(ctx: EffectCtx, item: CardQueueItem): void {
     combat.combatFlags.skillsPlayedThisCombat++;
   } else if (def.type === "power") {
     combat.combatFlags.powersPlayedThisCombat++;
+  }
+
+  // GameActionManager.getNextAction: a half-dead target (a Darkling or the
+  // Awakened One's corpse) is not isDying, so canUse passed and the play was
+  // counted above; an ENEMY card aimed at it then leaves limbo without being
+  // used - no effects, no play hooks, no destination pile, and no retarget.
+  if (def.target === "enemy" && item.target !== null && combat.monsters[item.target]?.halfDead) {
+    removeCardFromCombat(ctx, item.iid);
+    ctx.rt.currentItem = null;
+    return;
   }
 
   ctx.emit("cardPlayed", {
@@ -630,12 +660,15 @@ export function afterCardUsed(ctx: EffectCtx, args: unknown): void {
   if (!c) return;
   const def = ctx.bundle.cards.get(c.defId)!;
 
-  // monster after-card powers (Time Eater, Slow, Beat of Death) via hooks
-  for (let i = 0; i < combat.monsters.length; i++) {
-    const m = combat.monsters[i]!;
-    if (!m.isDead && !m.isEscaped) fireHook(ctx, monster(i), "onAfterCardPlayed", c);
+  // monster after-card powers (Time Eater, Slow, Beat of Death) via hooks;
+  // a card that was never actually used (skipTriggers) fires none of them
+  if (!item?.skipTriggers) {
+    for (let i = 0; i < combat.monsters.length; i++) {
+      const m = combat.monsters[i]!;
+      if (!m.isDead && !m.isEscaped) fireHook(ctx, monster(i), "onAfterCardPlayed", c);
+    }
+    fireHook(ctx, PLAYER, "onAfterCardPlayed", c);
   }
-  fireHook(ctx, PLAYER, "onAfterCardPlayed", c);
 
   if (item?.purgeOnUse) {
     removeCardFromCombat(ctx, iid);
@@ -644,7 +677,7 @@ export function afterCardUsed(ctx: EffectCtx, args: unknown): void {
   }
 
   c.freeToPlayOnce = false;
-  combat.turnFlags.lastCardPlayedType = def.type;
+  if (!item?.skipTriggers) combat.turnFlags.lastCardPlayedType = def.type;
 
   if (def.type === "power") {
     removeCardFromCombat(ctx, iid); // powers vanish
@@ -658,7 +691,8 @@ export function afterCardUsed(ctx: EffectCtx, args: unknown): void {
   ctx.rt.currentItem = null;
 }
 
-function removeCardFromCombat(ctx: EffectCtx, iid: number): void {
+/** Take a card out of this combat entirely: every pile, and its instance record. */
+export function removeCardFromCombat(ctx: EffectCtx, iid: number): void {
   const combat = ctx.combat!;
   for (const pile of Object.values(combat.player.piles)) {
     const idx = pile.indexOf(iid);
@@ -670,6 +704,22 @@ function removeCardFromCombat(ctx: EffectCtx, iid: number): void {
 function cardHasKeyword(c: CardInstance, def: { keywords: string[]; upgradeKeywords?: string[] }, kw: string): boolean {
   const set = c.upgrades > 0 && def.upgradeKeywords ? def.upgradeKeywords : def.keywords;
   return set.includes(kw);
+}
+
+/**
+ * AbstractCard.canUse for a queued autoplay: unplayable (cost -2) cards fail
+ * (Medical Kit / Blue Candle are ENGINE-GAPs), then the card's own canUse and
+ * the canPlayCard vetoes. Energy is never checked (isInAutoplay).
+ */
+function autoplayUsable(
+  ctx: EffectCtx,
+  c: CardInstance,
+  def: NonNullable<ReturnType<ContentBundle["cards"]["get"]>>,
+  item: CardQueueItem,
+): boolean {
+  if (c.cost === -2) return false;
+  if (def.canUse && !def.canUse(cardCtx(ctx, c, item.target, item.energyOnUse))) return false;
+  return vetoHook(ctx, PLAYER, "canPlayCard", c);
 }
 
 function executePrimitives(cctx: CardCtx, def: NonNullable<ReturnType<ContentBundle["cards"]["get"]>>): void {

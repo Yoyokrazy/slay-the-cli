@@ -4,6 +4,7 @@
 //   Player-side sites: player powers in application order -> stance -> relics
 //   in obtain order. Monster-side sites: that monster's powers in application
 //   order. Value-modifying hooks fold left through the same order.
+//   Exception: exhausting a card fires relics, then powers (fireHookScoped).
 //
 // Every engine call site fires hooks through the functions at the bottom of
 // this file - never by iterating powers/relics itself.
@@ -202,7 +203,19 @@ export function fireHook<K extends HookName>(
   name: K,
   ...args: unknown[]
 ): void {
-  for (const src of sourcesFor(ctx, actor)) {
+  fireHookScoped(ctx, actor, "all", name, ...args);
+}
+
+/** Fire restricted to powers-only or relics-only, for the few sites where the
+ *  game runs relics first (CardGroup.moveToExhaustPile). */
+export function fireHookScoped<K extends HookName>(
+  ctx: EffectCtx,
+  actor: ActorRef,
+  scope: SourceScope,
+  name: K,
+  ...args: unknown[]
+): void {
+  for (const src of scopedSources(ctx, actor, scope)) {
     const fn = src.hooks[name] as ((...a: unknown[]) => unknown) | undefined;
     if (fn) fn(src.hookCtx, ...args);
   }

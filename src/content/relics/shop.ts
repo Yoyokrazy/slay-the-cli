@@ -30,8 +30,9 @@ export const shopRelics: RelicDef[] = [
   },
   {
     // "The effects of your cost X cards are increased by 2."
-    // ENGINE-GAP: X-cost cards read energyOnUse in their own defs; no hook can
-    // add +2 to the captured X (needs an energyOnUse fold or card-def support).
+    // The game checks this relic inside each X-cost card's own action, so each
+    // card def must read it (Whirlwind does). ENGINE-GAP: the other X-cost
+    // cards still read the bare energyOnUse.
     id: "CHEMICAL_X",
     name: "Chemical X",
     tier: "shop",

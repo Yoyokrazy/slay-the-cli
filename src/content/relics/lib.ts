@@ -136,11 +136,23 @@ export function upgradeInCombat(ctx: EffectCtx, c: CardInstance): void {
   const def = ctx.bundle.cards.get(c.defId);
   if (!def) return;
   c.upgrades++;
-  if (def.upgradeValues.cost !== undefined && c.upgrades === 1) {
-    const newCost = def.upgradeValues.cost;
-    c.costForTurn = Math.min(c.costForTurn, newCost);
-    c.cost = newCost;
-  }
+  if (c.upgrades === 1) upgradeCostInCombat(c, def);
+}
+
+/**
+ * The cost half of a first in-combat upgrade. AbstractCard.upgradeBaseCost
+ * keeps this turn's discount: diff = costForTurn - cost, then costForTurn =
+ * newCost + diff when costForTurn > 0 (floored at 0). Blood for Blood's own
+ * upgrade() takes one more off a cost already cut below 4, else sets 3.
+ */
+export function upgradeCostInCombat(c: CardInstance, def: CardDef): void {
+  if (def.upgradeValues.cost === undefined) return;
+  const newCost = c.defId === "BLOOD_FOR_BLOOD" && c.cost < 4 ? c.cost - 1 : def.upgradeValues.cost;
+  const diff = c.costForTurn - c.cost;
+  c.cost = newCost;
+  if (c.costForTurn > 0) c.costForTurn = c.cost + diff;
+  if (c.costForTurn < 0) c.costForTurn = 0;
+  if (c.cost < 0) c.cost = 0;
 }
 
 // ------------------------------------------------------------------------------

@@ -2,10 +2,12 @@
 // Values audited against data/corpus/cards.json - corpus numbers only.
 
 import type { CardDef } from "../../../engine/content/defs";
+import type { GameAction } from "../../../engine/core/actions";
 import { calcCardDamage, calcBlock } from "../../../engine/combat/damageCalc";
 import { PLAYER, monster } from "../../../engine/core/ids";
 import { getPowerAmount } from "../../../engine/combat/powerRuntime";
 import { makeTempCard } from "../../../engine/combat/interpreter";
+import { charColor } from "../../relics/lib";
 
 export const ironcladUncommons: CardDef[] = [
   {
@@ -130,9 +132,8 @@ export const ironcladUncommons: CardDef[] = [
     upgradeValues: { magic: 3 },
     keywords: ["exhaust"],
     onPlay: (ctx) => {
-      // ENGINE-NOTE: the game routes this through ApplyPowerAction(StrengthPower
-      // negative), which Artifact blocks; our applyPower keys Artifact off the
-      // power's kind (STRENGTH is a buff), so Artifact will not negate Disarm.
+      // ApplyPowerAction(StrengthPower(-n)): a negative Strength power is a
+      // DEBUFF, so Artifact negates it (applyPower: STRENGTH canGoNegative).
       ctx.queue.addToBottom({
         kind: "applyPower",
         source: PLAYER,
@@ -290,13 +291,18 @@ export const ironcladUncommons: CardDef[] = [
     upgradeValues: { cost: 0 },
     keywords: ["exhaust"],
     onPlay: (ctx) => {
-      // random red Attack from the class pool (common/uncommon/rare, like
-      // returnTrulyRandomCardInCombat). ENGINE-NOTE: pool sorted by id for
-      // determinism; the game's library order differs, so specific rolls map to
-      // different cards even with an identical cardRandomRng stream.
+      // returnTrulyRandomCardInCombat(ATTACK): the character's common, then
+      // uncommon, then rare pool, minus HEALING cards (Feed, Reaper), one
+      // cardRandomRng roll. ENGINE-NOTE: inside each rarity the game keeps its
+      // CardLibrary order; this engine sorts by id, so a given roll maps to a
+      // different card even with an identical cardRandomRng stream.
+      const color = charColor(ctx.run.character);
+      const rank: Record<string, number> = { common: 0, uncommon: 1, rare: 2 };
       const pool = [...ctx.bundle.cards.values()]
-        .filter((d) => d.color === "red" && d.type === "attack" && d.rarity !== "basic" && d.rarity !== "special")
-        .sort((a, b) => (a.id < b.id ? -1 : 1));
+        .filter(
+          (d) => d.color === color && d.type === "attack" && d.rarity in rank && !d.keywords.includes("tag:healing"),
+        )
+        .sort((a, b) => rank[a.rarity]! - rank[b.rarity]! || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (pool.length === 0) return;
       const pick = pool[ctx.rng("cardRandomRng").random(pool.length - 1)]!;
       const combat = ctx.combat!;
@@ -411,7 +417,9 @@ export const ironcladUncommons: CardDef[] = [
     upgradeValues: { damage: 8, magic: 8 },
     keywords: [],
     onPlay: (ctx) => {
-      // growth is stored in card.misc - per combat, since instances are per-combat
+      // growth lives in card.misc (instances are per-combat). ModifyDamageAction
+      // applies it after the hit, to every instance sharing this card's uuid
+      // (a Double Tap copy grows the original too).
       const target = ctx.target ?? 0;
       const dmg = calcCardDamage(ctx, ctx.card, target, 8 + ctx.card.misc);
       ctx.queue.addToBottom({
@@ -419,7 +427,11 @@ export const ironcladUncommons: CardDef[] = [
         target: monster(target),
         info: { type: "attack", source: PLAYER, amount: dmg },
       });
-      ctx.card.misc += ctx.upgraded ? 8 : 5;
+      ctx.queue.addToBottom({
+        kind: "effect",
+        ref: "ironclad/rampageGrow",
+        args: { uuid: ctx.card.uuid ?? ctx.card.iid, amount: ctx.upgraded ? 8 : 5 },
+      });
     },
   },
   {
@@ -486,16 +498,20 @@ export const ironcladUncommons: CardDef[] = [
     upgradeValues: { block: 7 },
     keywords: [],
     onPlay: (ctx) => {
-      // exhaust every non-Attack in hand; gain block per card (Dex applies per gain)
+      // block fixed at use (Dex/Frail); the hand is read when the action resolves
+      const block = calcBlock(ctx, ctx.upgraded ? 7 : 5, ctx.card, true);
       const combat = ctx.combat!;
-      const block = ctx.upgraded ? 7 : 5;
-      for (const iid of [...combat.player.piles.hand]) {
-        const def = ctx.bundle.cards.get(combat.cards[iid]!.defId);
-        if (def?.type === "attack") continue;
-        ctx.queue.addToBottom({ kind: "exhaust", sel: { kind: "iid", iid } });
-        const amount = calcBlock(ctx, block, ctx.card, true);
-        ctx.queue.addToBottom({ kind: "gainBlock", target: PLAYER, amount, fromCard: true });
-      }
+      // (the preview dry run leaves this card in hand; a real play has it in limbo)
+      const n = combat.player.piles.hand.filter(
+        (iid) => iid !== ctx.card.iid && ctx.bundle.cards.get(combat.cards[iid]!.defId)?.type !== "attack",
+      ).length;
+      const gain: GameAction = { kind: "gainBlock", target: PLAYER, amount: block, fromCard: true };
+      ctx.queue.addToBottom({
+        kind: "effect",
+        ref: "ironclad/secondWind",
+        args: { block },
+        preview: Array.from({ length: n }, () => gain),
+      });
     },
   },
   {
@@ -539,12 +555,8 @@ export const ironcladUncommons: CardDef[] = [
     upgradeValues: { damage: 22 },
     keywords: [],
     onPlay: (ctx) => {
-      const combat = ctx.combat!;
       const target = ctx.target ?? 0;
-      for (const iid of [...combat.player.piles.hand]) {
-        const def = ctx.bundle.cards.get(combat.cards[iid]!.defId);
-        if (def?.type !== "attack") ctx.queue.addToBottom({ kind: "exhaust", sel: { kind: "iid", iid } });
-      }
+      ctx.queue.addToBottom({ kind: "effect", ref: "ironclad/exhaustAllNonAttack" });
       const dmg = calcCardDamage(ctx, ctx.card, target, ctx.upgraded ? 22 : 16);
       ctx.queue.addToBottom({
         kind: "damage",
@@ -564,10 +576,20 @@ export const ironcladUncommons: CardDef[] = [
     values: { magic: 3 },
     upgradeValues: { magic: 5 },
     keywords: ["exhaust"],
-    primitives: [
-      { do: "applyPower", power: "WEAK", n: "magic", target: "all" },
-      { do: "applyPower", power: "VULNERABLE", n: "magic", target: "all" },
-    ],
+    onPlay: (ctx) => {
+      // per enemy: Weak then Vulnerable (ApplyPowerAction no-ops on the dead)
+      for (const m of ctx.combat!.monsters) {
+        for (const powerId of ["WEAK", "VULNERABLE"]) {
+          ctx.queue.addToBottom({
+            kind: "applyPower",
+            source: PLAYER,
+            target: monster(m.idx),
+            powerId,
+            amount: ctx.upgraded ? 5 : 3,
+          });
+        }
+      }
+    },
   },
   {
     id: "SPOT_WEAKNESS",
@@ -581,18 +603,11 @@ export const ironcladUncommons: CardDef[] = [
     upgradeValues: { magic: 4 },
     keywords: [],
     onPlay: (ctx) => {
-      const m = ctx.combat!.monsters[ctx.target ?? 0];
-      if (!m || m.isDead || m.isEscaped || !m.move) return;
-      const intent = ctx.bundle.monsters.get(m.id)?.moves[m.move]?.intent;
-      if (intent && intent.startsWith("attack")) {
-        ctx.queue.addToBottom({
-          kind: "applyPower",
-          source: PLAYER,
-          target: PLAYER,
-          powerId: "STRENGTH",
-          amount: ctx.upgraded ? 4 : 3,
-        });
-      }
+      ctx.queue.addToBottom({
+        kind: "effect",
+        ref: "ironclad/spotWeakness",
+        args: { idx: ctx.target ?? 0, amount: ctx.upgraded ? 4 : 3 },
+      });
     },
   },
   {

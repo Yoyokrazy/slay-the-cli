@@ -14,9 +14,11 @@ import type { CardInstanceId } from "../../../engine/core/ids";
 import { PLAYER, monster } from "../../../engine/core/ids";
 import { calcCardDamage } from "../../../engine/combat/damageCalc";
 import { executeAction, exhaustCard, makeTempCard } from "../../../engine/combat/interpreter";
-import { moveCard, reshuffleDiscardIntoDraw } from "../../../engine/combat/piles";
+import { HAND_LIMIT, moveCard, reshuffleDiscardIntoDraw } from "../../../engine/combat/piles";
 import { applyPower, getPower } from "../../../engine/combat/powerRuntime";
 import { foldHook } from "../../../engine/core/hooks";
+import { hasRelic } from "../../util";
+import { upgradeCostInCombat } from "../../relics/lib";
 
 // ------------------------------------------------------------------------------
 // helpers
@@ -40,16 +42,12 @@ function canUpgradeInCombat(ctx: EffectCtx, c: CardInstance): boolean {
   return c.upgrades === 0 || def.keywords.includes("multiUpgrade");
 }
 
-/** In-combat upgrade: bump upgrades; sync cost on the 0->1 transition. */
+/** In-combat upgrade: bump upgrades; the first one also applies the upgrade cost (upgradeBaseCost). */
 function upgradeInCombat(ctx: EffectCtx, c: CardInstance): void {
   const def = ctx.bundle.cards.get(c.defId);
   if (!def) return;
   c.upgrades++;
-  if (c.upgrades === 1 && def.upgradeValues.cost !== undefined) {
-    const newCost = def.upgradeValues.cost;
-    if (c.costForTurn === c.cost) c.costForTurn = newCost;
-    c.cost = newCost;
-  }
+  if (c.upgrades === 1) upgradeCostInCombat(c, def);
   ctx.emit("cardUpgraded", { iid: c.iid });
 }
 
@@ -127,13 +125,17 @@ function swordBoomerangHit(ctx: EffectCtx, args: unknown): void {
 }
 
 /**
- * Heal the player inside an effect body. Feed/Reaper must heal even when their
- * damage just ended the combat - runQueue drops queued actions once combatOver
- * is set, so the heal happens synchronously here (onHeal fold still applied).
+ * Whirlwind (WhirlwindAction): X hits of the use-time multiDamage, +2 with
+ * Chemical X (the game checks the relic inside each X-cost action). The hits
+ * are addToBot from the action, so they land after the onUseCard hook actions
+ * (Rage block, Sharp Hide) and after the card has gone to the discard pile.
  */
-function healPlayerNow(ctx: EffectCtx, amount: number): void {
-  const healed = Math.floor(foldHook(ctx, PLAYER, "onHeal", amount));
-  ctx.run.hp = Math.min(ctx.run.maxHp, ctx.run.hp + healed);
+function whirlwind(ctx: EffectCtx, args: unknown): void {
+  const { amounts, x } = args as { amounts: number[]; x: number };
+  const effect = x + (hasRelic(ctx, "CHEMICAL_X") ? 2 : 0);
+  for (let i = 0; i < effect; i++) {
+    ctx.queue.addToBottom({ kind: "damageAllMonsters", amounts, info: { type: "attack", source: PLAYER } });
+  }
 }
 
 /** Fiend Fire: queue all exhausts above all hits, with exhaust hooks able to interleave via addToTop. */
@@ -151,7 +153,77 @@ function fiendFire(ctx: EffectCtx, args: unknown): void {
   }
 }
 
-/** Reaper: AoE damage + heal the total HP the enemies actually lost, atomically. */
+/**
+ * ExhaustAction(n, isRandom=true, anyNumber=false) (True Grit): an empty hand
+ * does nothing; a hand of n or fewer is exhausted whole, top card first, with
+ * no roll; otherwise each pick is hand.getRandomCard(cardRandomRng).
+ */
+function exhaustRandomFromHand(ctx: EffectCtx, args: unknown): void {
+  const { n } = args as { n: number };
+  const hand = ctx.combat!.player.piles.hand;
+  if (hand.length === 0) return;
+  if (hand.length <= n) {
+    const count = hand.length;
+    for (let i = 0; i < count && hand.length > 0; i++) exhaustCard(ctx, hand[hand.length - 1]!);
+    return;
+  }
+  for (let i = 0; i < n && hand.length > 0; i++) {
+    exhaustCard(ctx, hand[ctx.rng("cardRandomRng").random(hand.length - 1)]!);
+  }
+}
+
+/** ExhaustSpecificCardAction: exhausts the card only if it is still in the hand. */
+function exhaustFromHand(ctx: EffectCtx, args: unknown): void {
+  const { iid } = args as { iid: CardInstanceId };
+  if (ctx.combat!.player.piles.hand.includes(iid)) exhaustCard(ctx, iid);
+}
+
+function nonAttacksInHand(ctx: EffectCtx): CardInstanceId[] {
+  const combat = ctx.combat!;
+  return combat.player.piles.hand.filter((iid) => ctx.bundle.cards.get(combat.cards[iid]!.defId)?.type !== "attack");
+}
+
+/**
+ * Second Wind (BlockPerNonAttackAction): reads the hand when it resolves, then
+ * addToTops one GainBlock per non-Attack and, above them, one exhaust per card
+ * in hand order - so every exhaust (last card first) resolves before any block.
+ */
+function secondWind(ctx: EffectCtx, args: unknown): void {
+  const { block } = args as { block: number };
+  const cards = nonAttacksInHand(ctx);
+  for (let i = 0; i < cards.length; i++) {
+    ctx.queue.addToTop({ kind: "gainBlock", target: PLAYER, amount: block, fromCard: true });
+  }
+  for (const iid of cards) ctx.queue.addToTop({ kind: "effect", ref: "ironclad/exhaustFromHand", args: { iid } });
+}
+
+/** Sever Soul (ExhaustAllNonAttackAction): addToTop per card, so the last card exhausts first. */
+function exhaustAllNonAttack(ctx: EffectCtx): void {
+  for (const iid of nonAttacksInHand(ctx)) {
+    ctx.queue.addToTop({ kind: "effect", ref: "ironclad/exhaustFromHand", args: { iid } });
+  }
+}
+
+/**
+ * Spot Weakness (SpotWeaknessAction): the intent is read when the action
+ * resolves and the Strength is addToBot, behind the card's own resolution.
+ */
+function spotWeakness(ctx: EffectCtx, args: unknown): void {
+  const { idx, amount } = args as { idx: number; amount: number };
+  const m = ctx.combat!.monsters[idx];
+  if (!m || m.isDead || m.isEscaped || !m.move) return;
+  const intent = ctx.bundle.monsters.get(m.id)?.moves[m.move]?.intent;
+  if (intent && intent.startsWith("attack")) {
+    ctx.queue.addToBottom({ kind: "applyPower", source: PLAYER, target: PLAYER, powerId: "STRENGTH", amount });
+  }
+}
+
+/**
+ * Reaper (VampireDamageAllEnemiesAction): AoE damage, then heal the HP the
+ * enemies actually lost. The heal is a queued HealAction (addToBot), so it
+ * takes the normal heal path (Magic Flower, Red Skull's onNotBloodied) and
+ * still lands after a combat-ending sweep (clearPostCombatActions keeps it).
+ */
 function reaperAttack(ctx: EffectCtx, args: unknown): void {
   const { amounts } = args as { amounts: number[] };
   const before = ctx.combat!.monsters.map((m) => m.hp);
@@ -160,18 +232,23 @@ function reaperAttack(ctx: EffectCtx, args: unknown): void {
   ctx.combat!.monsters.forEach((m, i) => {
     heal += Math.max(0, (before[i] ?? m.hp) - m.hp);
   });
-  if (heal > 0) healPlayerNow(ctx, heal);
+  if (heal > 0) ctx.queue.addToBottom({ kind: "heal", target: PLAYER, amount: heal });
 }
 
-/** Feed: damage + on fatal (non-minion) raise max HP and heal, atomically. */
+/**
+ * Feed (FeedAction): damage, then on a fatal hit on a non-Minion raise max HP
+ * and heal inside the same action (increaseMaxHp -> heal: heal folds and Red
+ * Skull's onNotBloodied apply). The game checks hasPower("Minion"), so Gremlin
+ * Leader's gremlins give nothing even though their monster def is "normal".
+ */
 function feedAttack(ctx: EffectCtx, args: unknown): void {
   const { idx, dmg, bonus } = args as { idx: number; dmg: number; bonus: number };
   executeAction(ctx, { kind: "damage", target: monster(idx), info: { type: "attack", source: PLAYER, amount: dmg } });
   const m = ctx.combat!.monsters[idx];
   if (!m || !m.isDead || m.halfDead) return;
-  if (ctx.bundle.monsters.get(m.id)?.category === "minion") return;
+  if (m.powers.some((p) => p.id === "MINION")) return;
   ctx.run.maxHp += bonus;
-  healPlayerNow(ctx, bonus);
+  executeAction(ctx, { kind: "heal", target: PLAYER, amount: bonus });
 }
 
 /** Combust: each play adds 1 to the end-of-turn HP loss (power data counter). */
@@ -182,8 +259,30 @@ function combustStack(ctx: EffectCtx): void {
   p.data = { hpLoss: prev + 1 };
 }
 
-/** Havoc: play the top card of the draw pile (random target, free) and exhaust it. */
-function havocPlayTop(ctx: EffectCtx): void {
+/**
+ * Rampage (ModifyDamageAction): grow every in-battle instance with this uuid
+ * (GetAllInBattleInstances: the piles plus the card in use, which sits in
+ * limbo here).
+ */
+function rampageGrow(ctx: EffectCtx, args: unknown): void {
+  const { uuid, amount } = args as { uuid: number; amount: number };
+  const combat = ctx.combat!;
+  for (const pile of Object.values(combat.player.piles)) {
+    for (const iid of pile) {
+      const c = combat.cards[iid];
+      if (c && (c.uuid ?? c.iid) === uuid) c.misc += amount;
+    }
+  }
+}
+
+/**
+ * Havoc (PlayTopCardAction): play the top card of the draw pile against the
+ * target Havoc rolled at use, free, and exhaust it. An empty draw pile is
+ * reshuffled first; a card that fails canUse is exhausted unplayed (see
+ * resolveCardPlay).
+ */
+function havocPlayTop(ctx: EffectCtx, args: unknown): void {
+  const { target } = args as { target: number | null };
   const combat = ctx.combat!;
   const piles = combat.player.piles;
   if (piles.draw.length === 0) {
@@ -191,9 +290,8 @@ function havocPlayTop(ctx: EffectCtx): void {
     reshuffleDiscardIntoDraw(ctx); // PlayTopCardAction reshuffles an empty draw pile
     if (piles.draw.length === 0) return;
   }
-  // PlayTopCardAction always rolls a random target (cardRandomRng), even when
-  // the played card is untargeted - keep the roll for RNG-stream parity.
-  const target = randomAliveIdx(ctx);
+  // ENGINE-NOTE: with no living target (all enemies half-dead) the game still
+  // queues the card with a null monster; this engine leaves it in the pile.
   if (target === null) return;
   const iid = piles.draw[0]!;
   moveCard(ctx, iid, "limbo");
@@ -229,7 +327,9 @@ function armamentsChoose(ctx: EffectCtx, args: unknown): void {
 }
 
 function armamentsResume(ctx: EffectCtx, args: unknown): void {
-  upgradeInCombat(ctx, ctx.combat!.cards[chosenIid(ctx, args)]!);
+  const pick = chosenIid(ctx, args);
+  upgradeInCombat(ctx, ctx.combat!.cards[pick]!);
+  handAfterSelect(ctx, (args as ResumeArgs).iids, pick, true);
   replayTail(ctx, args);
 }
 
@@ -249,6 +349,8 @@ function headbuttResume(ctx: EffectCtx, args: unknown): void {
 /** Exhume: return an exhausted card (never another Exhume) to your hand. */
 function exhumeChoose(ctx: EffectCtx): void {
   const combat = ctx.combat!;
+  // ExhumeAction does nothing into a full hand (reachable when Havoc plays it)
+  if (combat.player.piles.hand.length >= HAND_LIMIT) return;
   const candidates = combat.player.piles.exhaust.filter((iid) => combat.cards[iid]!.defId !== "EXHUME");
   chooseOne(ctx, candidates, "exhaust", "Exhume: return a card to your hand", "ironclad/exhume", {}, (iid) =>
     moveCard(ctx, iid, "hand"),
@@ -260,6 +362,68 @@ function exhumeResume(ctx: EffectCtx, args: unknown): void {
   replayTail(ctx, args);
 }
 
+/** What makeStatEquivalentCopy carries over (the copy gets a fresh identity). */
+interface StatCopy {
+  defId: string;
+  upgrades: number;
+  cost: number;
+  costForTurn: number;
+  freeToPlayOnce: boolean;
+  misc: number;
+}
+
+function statsOf(c: CardInstance): StatCopy {
+  return {
+    defId: c.defId,
+    upgrades: c.upgrades,
+    cost: c.cost,
+    costForTurn: c.costForTurn,
+    freeToPlayOnce: c.freeToPlayOnce,
+    misc: c.misc,
+  };
+}
+
+/**
+ * MakeTempCardInHandAction(card.makeStatEquivalentCopy()): same upgrades,
+ * cost, cost this turn, misc (Rampage growth) and freeToPlayOnce; Master
+ * Reality may upgrade it (upgradeBaseCost rules); a full hand sends it to the
+ * discard pile.
+ */
+function makeStatCopyInHand(ctx: EffectCtx, args: unknown): void {
+  const src = args as StatCopy;
+  const combat = ctx.combat!;
+  const def = ctx.bundle.cards.get(src.defId);
+  if (!def) return;
+  const iid = combat.nextCardInstanceId++;
+  const c: CardInstance = { ...src, iid, masterIdx: null, retainOnce: false };
+  combat.cards[iid] = c;
+  const upgrades = Math.floor(foldHook(ctx, PLAYER, "modifyCreatedCardUpgrades", c.upgrades, c.defId));
+  if (upgrades > c.upgrades) {
+    c.upgrades = upgrades;
+    if (src.upgrades === 0) upgradeCostInCombat(c, def);
+  }
+  const dest = combat.player.piles.hand.length >= HAND_LIMIT ? "discard" : "hand";
+  combat.player.piles[dest].push(iid);
+  ctx.emit("cardCreated", { iid, defId: c.defId, dest });
+}
+
+/**
+ * Hand order after the game's hand-select pattern (Armaments, Dual Wield): the
+ * ineligible cards are pulled out (removeAll) and the pick leaves for the
+ * select screen; afterwards the pick (when it comes back) and then the held
+ * cards are appended, so the hand ends [other candidates, pick, ineligible].
+ */
+function handAfterSelect(ctx: EffectCtx, eligible: CardInstanceId[], pick: CardInstanceId, pickReturns: boolean): void {
+  const hand = ctx.combat!.player.piles.hand;
+  const ok = new Set(eligible);
+  const order = [
+    ...hand.filter((iid) => ok.has(iid) && iid !== pick),
+    ...(pickReturns && hand.includes(pick) ? [pick] : []),
+    ...hand.filter((iid) => !ok.has(iid)),
+  ];
+  hand.splice(0, hand.length, ...order);
+}
+
 /** Dual Wield: copy a chosen Attack or Power card into your hand (1 or 2 copies). */
 function dualWieldChoose(ctx: EffectCtx, args: unknown): void {
   const { copies } = args as { copies: number };
@@ -268,27 +432,41 @@ function dualWieldChoose(ctx: EffectCtx, args: unknown): void {
     const t = ctx.bundle.cards.get(combat.cards[iid]!.defId)?.type;
     return t === "attack" || t === "power";
   });
+  // a lone candidate stays in hand and just gets its copies
   chooseOne(ctx, candidates, "hand", "Dual Wield: choose an Attack or Power", "ironclad/dualWield", { copies }, (iid) =>
-    dualWieldCopy(ctx, iid, copies),
+    queueStatCopies(ctx, statsOf(combat.cards[iid]!), copies),
   );
 }
 
-function dualWieldCopy(ctx: EffectCtx, iid: CardInstanceId, copies: number): void {
-  const c = ctx.combat!.cards[iid]!;
-  // ENGINE-NOTE: makeTempCard starts misc at 0, so in-combat scratch (Rampage
-  // growth) is not carried onto the copy; the game's makeStatEquivalentCopy is.
-  ctx.queue.addToTop({ kind: "makeTempCard", defId: c.defId, upgrades: c.upgrades, dest: "hand", n: copies });
+function queueStatCopies(ctx: EffectCtx, stats: StatCopy, n: number): void {
+  for (let i = 0; i < n; i++) ctx.queue.addToTop({ kind: "effect", ref: "ironclad/makeStatCopy", args: stats });
 }
 
+/**
+ * DualWieldAction after a pick: the picked card is not handed back. A stat
+ * copy of it plus the copies are queued (addToTop), behind the held non-Attack
+ * and non-Power cards that return to the hand first.
+ */
 function dualWieldResume(ctx: EffectCtx, args: unknown): void {
-  const { copies } = args as { copies: number };
-  dualWieldCopy(ctx, chosenIid(ctx, args), copies);
+  const { copies, iids } = args as { copies: number; iids: CardInstanceId[] };
+  const pick = chosenIid(ctx, args);
+  const combat = ctx.combat!;
+  const stats = statsOf(combat.cards[pick]!);
+  handAfterSelect(ctx, iids, pick, false);
+  delete combat.cards[pick];
+  queueStatCopies(ctx, stats, copies + 1);
   replayTail(ctx, args);
 }
 
-/** Warcry: after drawing, put a hand card on top of the draw pile. */
+/** Warcry (PutOnDeckAction, amount 1): after drawing, put a hand card on top of the draw pile. */
 function warcryChoose(ctx: EffectCtx): void {
   const hand = [...ctx.combat!.player.piles.hand];
+  if (hand.length === 1) {
+    // hand.size() <= amount: the action moves hand.getRandomCard(cardRandomRng)
+    // instead of opening the grid, so the lone card still costs a roll
+    moveCard(ctx, hand[ctx.rng("cardRandomRng").random(hand.length - 1)]!, "draw", "top");
+    return;
+  }
   chooseOne(ctx, hand, "hand", "Warcry: put a card on top of your draw pile", "ironclad/warcry", {}, (iid) =>
     moveCard(ctx, iid, "draw", "top"),
   );
@@ -356,10 +534,17 @@ function endTurnDebuff(ctx: EffectCtx, args: unknown): void {
 export const ironcladEffects: Map<string, EffectFn> = new Map<string, EffectFn>([
   ["ironclad/juggernautHit", juggernautHit],
   ["ironclad/swordBoomerangHit", swordBoomerangHit],
+  ["ironclad/whirlwind", whirlwind],
+  ["ironclad/exhaustRandom", exhaustRandomFromHand],
+  ["ironclad/exhaustFromHand", exhaustFromHand],
+  ["ironclad/secondWind", secondWind],
+  ["ironclad/exhaustAllNonAttack", exhaustAllNonAttack],
+  ["ironclad/spotWeakness", spotWeakness],
   ["ironclad/fiendFire", fiendFire],
   ["ironclad/reaper", reaperAttack],
   ["ironclad/feed", feedAttack],
   ["ironclad/combustStack", combustStack],
+  ["ironclad/rampageGrow", rampageGrow],
   ["ironclad/havoc", havocPlayTop],
   ["ironclad/armamentsChoose", armamentsChoose],
   ["ironclad/armaments", armamentsResume],
@@ -369,6 +554,7 @@ export const ironcladEffects: Map<string, EffectFn> = new Map<string, EffectFn>(
   ["ironclad/exhume", exhumeResume],
   ["ironclad/dualWieldChoose", dualWieldChoose],
   ["ironclad/dualWield", dualWieldResume],
+  ["ironclad/makeStatCopy", makeStatCopyInHand],
   ["ironclad/warcryChoose", warcryChoose],
   ["ironclad/warcry", warcryResume],
   ["ironclad/trueGritChoose", trueGritChoose],

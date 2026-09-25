@@ -15,6 +15,7 @@ import { executeAction, exhaustCard, makeTempCard } from "../../../engine/combat
 import { moveCard, reshuffleDiscardIntoDraw } from "../../../engine/combat/piles";
 import { applyPower, getPower } from "../../../engine/combat/powerRuntime";
 import { foldHook } from "../../../engine/core/hooks";
+import { upgradeCostInCombat } from "../../relics/lib";
 
 // ------------------------------------------------------------------------------
 // helpers
@@ -134,16 +135,12 @@ function canUpgradeInCombat(ctx: EffectCtx, c: CardInstance): boolean {
   return c.upgrades === 0 || def.keywords.includes("multiUpgrade");
 }
 
-/** In-combat upgrade: bump upgrades; sync cost on the 0->1 transition. */
+/** In-combat upgrade: bump upgrades; the first one also applies the upgrade cost (upgradeBaseCost). */
 function upgradeInCombat(ctx: EffectCtx, c: CardInstance): void {
   const def = ctx.bundle.cards.get(c.defId);
   if (!def) return;
   c.upgrades++;
-  if (c.upgrades === 1 && def.upgradeValues.cost !== undefined) {
-    const newCost = def.upgradeValues.cost;
-    if (c.costForTurn === c.cost) c.costForTurn = newCost;
-    c.cost = newCost;
-  }
+  if (c.upgrades === 1) upgradeCostInCombat(c, def);
   ctx.emit("cardUpgraded", { iid: c.iid });
 }
 
@@ -305,26 +302,27 @@ function theBombApply(ctx: EffectCtx, args: unknown): void {
   if (p) p.data = { bombs: [{ turns: 3, damage }] };
 }
 
-/** Hand of Greed: damage + gold on fatal (non-minion), atomically (Feed pattern). */
+/** Hand of Greed (GreedAction): damage + gold on a fatal hit on a non-Minion (hasPower("Minion")), atomically. */
 function handOfGreedAttack(ctx: EffectCtx, args: unknown): void {
   const { idx, dmg, gold } = args as { idx: number; dmg: number; gold: number };
   executeAction(ctx, { kind: "damage", target: monster(idx), info: { type: "attack", source: PLAYER, amount: dmg } });
   const m = ctx.combat!.monsters[idx];
   if (!m || !m.isDead || m.halfDead) return;
-  if (ctx.bundle.monsters.get(m.id)?.category === "minion") return;
+  if (m.powers.some((p) => p.id === "MINION")) return;
   gainGoldFolded(ctx, gold);
 }
 
 /**
- * Ritual Dagger: damage + on fatal (non-minion) permanently grow this card's
- * damage: in-combat instance misc AND the master-deck copy via masterIdx.
+ * Ritual Dagger: damage + on fatal (non-Minion, hasPower("Minion")) permanently
+ * grow this card's damage: in-combat instance misc AND the master-deck copy via
+ * masterIdx.
  */
 function ritualDaggerAttack(ctx: EffectCtx, args: unknown): void {
   const { idx, iid, dmg, bonus } = args as { idx: number; iid: CardInstanceId; dmg: number; bonus: number };
   executeAction(ctx, { kind: "damage", target: monster(idx), info: { type: "attack", source: PLAYER, amount: dmg } });
   const m = ctx.combat!.monsters[idx];
   if (!m || !m.isDead || m.halfDead) return;
-  if (ctx.bundle.monsters.get(m.id)?.category === "minion") return;
+  if (m.powers.some((p) => p.id === "MINION")) return;
   const c = ctx.combat!.cards[iid];
   if (!c) return;
   c.misc += bonus;

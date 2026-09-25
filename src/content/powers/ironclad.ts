@@ -16,7 +16,8 @@ export const ironcladPowers: PowerDef[] = [
     stacking: "intensity",
     turnBased: false,
     hooks: {
-      atStartOfTurn: (ctx) => {
+      // DemonFormPower.atStartOfTurnPostDraw: queued behind the turn's draw
+      atStartOfTurnPostDraw: (ctx) => {
         ctx.queue.addToBottom({
           kind: "applyPower",
           source: ctx.owner,
@@ -56,7 +57,9 @@ export const ironcladPowers: PowerDef[] = [
     turnBased: false,
     hooks: {
       onExhaust: (ctx) => {
-        if (ctx.combat!.monsters.some((m) => !m.isDead && !m.isEscaped && !m.halfDead)) {
+        // !areMonstersBasicallyDead(): a half-dead enemy (Awakened One between
+        // phases) still counts, only dead or escaped ones do not
+        if (ctx.combat!.monsters.some((m) => !m.isDead && !m.isEscaped)) {
           ctx.queue.addToBottom({ kind: "draw", n: ctx.power!.amount });
         }
       },
@@ -176,7 +179,9 @@ export const ironcladPowers: PowerDef[] = [
         // carry a monster source and are excluded - matching V2.3.4 for every
         // in-scope source.
         if (amount > 0 && info.source === null && (info.type === "hpLoss" || info.type === "thorns")) {
-          ctx.queue.addToBottom({
+          // addToTop: the Strength lands before the rest of the queue (e.g. a
+          // Pain-triggered loss buffs the Sword Boomerang hits still pending)
+          ctx.queue.addToTop({
             kind: "applyPower",
             source: ctx.owner,
             target: ctx.owner,
@@ -211,11 +216,11 @@ export const ironcladPowers: PowerDef[] = [
     stacking: "intensity",
     turnBased: false,
     hooks: {
-      atStartOfTurn: (ctx) => {
-        // ENGINE-NOTE: the game's Brutality draw resolves before the turn's normal
-        // draw; our startPlayerTurn draws synchronously, so this draw lands after.
-        ctx.queue.addToBottom({ kind: "loseHp", target: ctx.owner, amount: ctx.power!.amount });
+      // BrutalityPower.atStartOfTurnPostDraw: DrawCardAction, then LoseHPAction,
+      // both behind the turn's normal draw
+      atStartOfTurnPostDraw: (ctx) => {
         ctx.queue.addToBottom({ kind: "draw", n: ctx.power!.amount });
+        ctx.queue.addToBottom({ kind: "loseHp", target: ctx.owner, amount: ctx.power!.amount });
       },
     },
   },
@@ -242,7 +247,9 @@ export const ironcladPowers: PowerDef[] = [
         if (ctx.power!.amount <= 0) return;
         if (ctx.bundle.cards.get(card.defId)?.type !== "attack") return;
         const item = ctx.rt.currentItem;
-        if (!item || item.autoplayed) return; // duplicated plays don't re-trigger
+        // DoubleTapPower keys off !card.purgeOnUse: replay copies never
+        // re-trigger, but autoplayed real cards (Havoc) are doubled.
+        if (!item || item.purgeOnUse) return;
         // duplicate resolves right after the original finishes (free, autoplayed)
         queueReplayCopy(ctx, card, target, item, "DOUBLE_TAP");
         ctx.queue.addToBottom({ kind: "reducePower", target: ctx.owner, powerId: "DOUBLE_TAP", amount: 1 });

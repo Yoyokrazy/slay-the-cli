@@ -40,11 +40,15 @@ export const corePowers: PowerDef[] = [
     },
   },
   {
+    // WeakPower priority 99: ApplyPowerAction re-sorts powers on every add, so
+    // Weak always folds after Strength/Vigor ((base + str) * 0.75), whatever
+    // order the two were applied in.
     id: "WEAK",
     name: "Weak",
     kind: "debuff",
     stacking: "duration",
     turnBased: true,
+    priority: 99,
     hooks: {
       atDamageGive: (ctx, d) => {
         if (ctx.owner.kind === "monster" && hasRelic(ctx, "PAPER_KRANE")) return f32mul(d, 0.6);
@@ -53,11 +57,13 @@ export const corePowers: PowerDef[] = [
     },
   },
   {
+    // FrailPower priority 10: folds after Dexterity ((base + dex) * 0.75).
     id: "FRAIL",
     name: "Frail",
     kind: "debuff",
     stacking: "duration",
     turnBased: true,
+    priority: 10,
     hooks: { modifyBlock: (ctx, b) => f32mul(b, 0.75) },
   },
   {

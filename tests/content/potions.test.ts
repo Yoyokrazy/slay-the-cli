@@ -11,6 +11,7 @@ import { corePowers } from "../../src/content/powers/core";
 import { ironcladBasics } from "../../src/content/cards/ironclad/basics";
 import { ironcladCommons } from "../../src/content/cards/ironclad/common";
 import { ironcladUncommons } from "../../src/content/cards/ironclad/uncommon";
+import { ironcladEffects } from "../../src/content/cards/ironclad/effects";
 import { allRelics, relicSupportPowers } from "../../src/content/relics";
 import { allPotions, effectivePotency } from "../../src/content/potions";
 import { returnRandomPotion } from "../../src/engine/run/rewards";
@@ -57,6 +58,7 @@ function makeBundle(): ContentBundle {
   for (const c of [...extraCards, ...ironcladBasics]) b.cards.set(c.id, c);
   for (const c of ironcladCommons.filter((c) => c.id === "PERFECTED_STRIKE" || c.id === "POMMEL_STRIKE" || c.id === "SHRUG_IT_OFF")) b.cards.set(c.id, c);
   for (const c of ironcladUncommons.filter((c) => c.id === "INFLAME")) b.cards.set(c.id, c);
+  for (const [k, v] of ironcladEffects) b.effects.set(k, v); // Whirlwind resolves through an effect
   for (const s of stances) b.stances.set(s.id, s);
   return b;
 }

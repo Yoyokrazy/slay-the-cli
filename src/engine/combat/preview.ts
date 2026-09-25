@@ -14,6 +14,7 @@
 import type { CardCtx, ContentBundle, EffectCtx } from "../content/defs";
 import { needsEnemyTarget } from "../content/targeting";
 import type { CardInstance } from "./combatState";
+import type { GameAction } from "../core/actions";
 import { vetoHook } from "../core/hooks";
 import { PLAYER } from "../core/ids";
 import { ActionQueue } from "../core/queue";
@@ -128,7 +129,7 @@ export function computeCardPreview(ctx: EffectCtx, iid: number, targetIdx: numbe
     let damage: number | null = null;
     let hits = 0;
     let block = 0;
-    for (let a = queue.pop(); a !== undefined; a = queue.pop()) {
+    const tally = (a: GameAction): void => {
       if (a.kind === "damage" && a.target.kind === "monster" && a.info.type === "attack") {
         damage = a.info.amount;
         hits++;
@@ -137,8 +138,11 @@ export function computeCardPreview(ctx: EffectCtx, iid: number, targetIdx: numbe
         hits++;
       } else if (a.kind === "gainBlock" && a.target.kind === "player") {
         block += a.amount;
+      } else if (a.kind === "effect" && a.preview) {
+        a.preview.forEach(tally);
       }
-    }
+    };
+    for (let a = queue.pop(); a !== undefined; a = queue.pop()) tally(a);
     if (damage === null && block === 0 && !partial) return null;
     return { damage, hits, block, partial };
   } catch {
